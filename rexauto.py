@@ -4162,7 +4162,7 @@ def verify_sdk_floor(env):
 # built from, so anyone can rebuild the bundled SDK from that branch.
 # The release this source belongs to. The GUI's Setup fetches the SDK of THIS
 # tag, never "latest": a newer release's SDK would fail this build's pin.
-REXAUTO_VERSION = "2.36.5"
+REXAUTO_VERSION = "2.36.6"
 
 SDK_PIN = {
     # v2.35: ReXGlue v0.10.0 becomes the default SDK, built from source with four
@@ -4229,9 +4229,9 @@ SDK_PIN = {
     #     builds every Bink plane texture that way (intro and title were flat
     #     magenta) and Forza Horizon logs two thousand per run. The fork this
     #     runtime replaced shipped the same default and ran the fleet on it.
-    "rexglue.exe": "fa50448bd146fb1d6061e02f0fac1bef2296c5487ff46d01821b5abc12e4fcef",
-    "rexruntime.dll": "aaa5110a8d7c83e4a1df9b2c6ae4dc12120b6851af7f3f3acba851016ef78bcc",
-    "rexgpu-xenos.dll": "f8f1490e5c900dd45d206e51b2922cfa9fa8e4fa72c5e187797d98bf39d3200a",
+    "rexglue.exe": "f243c4d4625d416ca473dca57ed25d11675eb07375136ceb2e9b8cbc1e5ede09",
+    "rexruntime.dll": "51d4346634b669af87e3c357178c84db44f2567192e51c79851db273b1fe9337",
+    "rexgpu-xenos.dll": "d6aecb9eaea56510e2936388e0ec7af3a14a57a91c078973e61d11121d2a0179",
 }
 
 

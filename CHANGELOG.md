@@ -1,5 +1,61 @@
 # Changelog
 
+## 2.36.6 — "what the guest was doing" (2026-09-05)
+
+Five fixes in the bundled SDK, four of them found by taking a second Dante's
+Inferno port apart and comparing it against ours on the same disc.
+
+**An unhandled access violation now names the guest routine.** A fault in
+recompiled code was reported as a host address on a host thread, which says
+nothing about the title. The runtime now dumps the guest registers and walks the
+link-register chain, staying inside the guest stack range so a wild `r1` ends
+the walk instead of reading arbitrary memory. That is what turned "0xC0000005
+somewhere in Dante after two minutes" into "a struct on the caller's stack has a
+null first field", in one run instead of a debugger session.
+
+**The MMIO decoder knew four instruction encodings.** `TryDecodeLoadStore`
+handled `movbe` both ways, `mov r/m32`, and `mov m32, imm32`. Anything else ends
+the process on a fault the handler could have serviced. Two gaps are closed:
+legacy and mandatory prefixes come *before* the REX byte and were not skipped,
+so the REX byte was read as an opcode and every form carrying one failed to
+decode; and the byte-sized forms were missing entirely — `mov m8` from a
+register or an immediate, `mov r8` from memory, and both `movzx`. Immediates are
+read at their real width now. The SSE forms are deliberately left undecoded:
+recognising them without teaching the load/store path to touch XMM registers
+would service the fault against the wrong register, which is a silent wrong
+value instead of a diagnosable stop.
+
+**`REX_HEAL_DISCOVER` works again on v0.10.0.** The 0.8.2 fork could log an
+unresolved indirect target and continue; the flag survived into the play script
+but the runtime it talks to had lost the behaviour, so the heal loop's discover
+mode aborted on the first target like any other run. Restored, with each
+distinct target logged once. The default path is unchanged and now also reports
+whether the address was in the function table, which separates "the table
+missed" from "the call site never consulted it".
+
+**A project can declare its own mid-asm hooks.** `[[midasm_hook]]` names a
+function by string, and the SDK emits the call — but there was nowhere for a
+project to declare that function, which made the whole mechanism unusable
+outside the SDK. The generated PCH now includes `<project>_hooks.h` when it
+exists.
+
+**`XUserFindUsers` answers with an empty result.** Dante's Inferno asks XLiveBase
+for user profiles while loading a save. Failing the call left the title holding a
+result pointer it never got, and it dereferenced it anyway. Success with a count
+of zero is the same "nobody found" the console reports for an offline profile.
+
+**Measured against the other Dante port**, same disc, 150 seconds each: both stay
+up, both recompile the same 6,681,844 bytes of the title across the same address
+range, 29,975 functions on our side against 29,980 on theirs (29,793 shared, the
+rest the same code cut differently). In that window ours logged 68 lines and no
+access violations; theirs logged 13,789 lines including 766 access violations,
+each one caught and continued past.
+
+Checked before shipping: Gears of War Judgment and Dante's Inferno built and
+ran their full minute, and Captain America built and exited cleanly at 54
+seconds with an empty error log (the autoplay keys walk it into a menu exit).
+The full fleet gate was not run for this release.
+
 ## 2.36.5 — "pick your build" (2026-09-05)
 
 **The patch list shows up again.** Forza Horizon's patch panel was empty, and so

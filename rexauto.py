@@ -3003,17 +3003,44 @@ def verify_switch_tables(ctx, switches=None, work=None):
     except OSError:
         pass
 
-    def json_matches_image(row):
-        """Only trust a recovered table that still reads back out of the image."""
+    def image_says(row):
+        """The table as the image reads it, or None when it cannot be read there."""
         tbl = row.get("table")
         if blob is None or not tbl:
-            return True
+            return None
         off = tbl - base
         n = len(row["targets"])
         if off < 0 or off + 4 * n > len(blob):
+            return None
+        return list(struct.unpack(">%dI" % n, blob[off:off + 4 * n]))
+
+    # Is the image usable as a second opinion at all? A dumped image is not always
+    # the flat base-relative mapping this assumes (FIFA Street's 1.8 MB dump does
+    # not cover tables that sit 0x27C0 past the base), and there a mismatch means
+    # "read the wrong bytes", not "the recovery is stale". Calibrate on the blocks
+    # that are already intact: if the image confirms those, a disagreement
+    # elsewhere is real and vetoes the repair; if it confirms almost none, the
+    # image is not a mapping we understand and jumptables.json stands alone.
+    agree = seen = 0
+    for m in blocks:
+        row = rows.get(int(m.group(2), 16))
+        if not row:
+            continue
+        cur = [int(x, 16) for x in re.findall(r"0x[0-9A-Fa-f]+", m.group(3))]
+        if cur != row["targets"]:
+            continue
+        got = image_says(row)
+        if got is None:
+            continue
+        seen += 1
+        agree += (got == row["targets"])
+    image_usable = seen >= 4 and agree * 2 >= seen
+
+    def json_matches_image(row):
+        if not image_usable:
             return True
-        real = list(struct.unpack(">%dI" % n, blob[off:off + 4 * n]))
-        return real == row["targets"]
+        got = image_says(row)
+        return got is None or got == row["targets"]
 
     fixed = []
     for m in reversed(blocks):                  # reversed: earlier spans stay valid
@@ -4135,7 +4162,7 @@ def verify_sdk_floor(env):
 # built from, so anyone can rebuild the bundled SDK from that branch.
 # The release this source belongs to. The GUI's Setup fetches the SDK of THIS
 # tag, never "latest": a newer release's SDK would fail this build's pin.
-REXAUTO_VERSION = "2.36.3"
+REXAUTO_VERSION = "2.36.4"
 
 SDK_PIN = {
     # v2.35: ReXGlue v0.10.0 becomes the default SDK, built from source with four

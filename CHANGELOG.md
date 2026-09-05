@@ -1,5 +1,59 @@
 # Changelog
 
+## 2.36.4 — "double-click" (2026-09-05)
+
+**A built port starts by double-clicking it.** Two things stood between a
+finished port and a picture, and both are now handled by the runtime the setup
+installs.
+
+*The game data.* Opening the exe with no arguments popped
+`--game_data_root was not provided.` and quit: the flag was the only way in, and
+an empty value was a hard error before the runtime was even constructed — which
+is why every port needed its `play <name>.cmd` wrapper. The runtime now takes
+the first location that actually holds a `default.xex`: the `game_root.txt`
+sidecar the pipeline already wrote next to the exe, a `game` folder beside it,
+then the exe's own folder. An explicit `--game_data_root` still wins. v0.8.0
+had this and it was lost in the v0.10.0 migration.
+
+*The GPU.* With the GPU split out into `rexgpu-*.dll`, a port started without
+`REX_GPU_PLUGIN` loaded no graphics at all: every `Vd*` kernel call logged
+"gpu_plugin not set; call ignored" and the window stayed black. The plugin sits
+right next to the exe, staged by the build. When nothing names one, the runtime
+now adopts the Xenos plugin if it is there, or the only `rexgpu-*.dll` present,
+and logs the choice. Two or more with no Xenos stays ambiguous and is left to
+the cvar.
+
+Both live in `share/rexglue/rex_app.cpp`, the source each port compiles, so the
+pinned SDK binaries are unchanged; both are commits on the SDK fork
+(`app-game-data-root-fallback`, `app-gpu-plugin-autoselect`).
+
+**The jump-table repair now reaches FIFA Street.** 2.36.3 only rewrote a drifted
+`labels` array when the recovered targets also read back out of the dumped image
+at the table's address. That second opinion assumes the dump is a flat
+base-relative mapping, and FIFA Street's is not: its 1.8 MB image does not hold
+the tables that sit `0x27C0` past the base, so the check read unrelated bytes,
+called the recovery wrong and left both damaged tables in place. The image is
+now calibrated before it may veto anything — the blocks that already agree with
+`jumptables.json` are read back first, and only if the image confirms those does
+a disagreement elsewhere block a repair. FIFA Street repairs its 2 tables of 24;
+every other port comes out byte-identical, and Captain America's 43-table repair
+still reproduces.
+
+**A stale precompiled header no longer fails a build.** Installing a new SDK
+gives every header a new mtime; ninja rebuilds the `.pch`, but the objects that
+consume it are not ordered after it, so a build can compile against the stale
+one and clang refuses every translation unit. That is now a cure like any other:
+the `.pch` files are removed and the build retried.
+
+**Gate.** Gears of War Judgment (99.1966% / 60,140 / 0), Dante's Inferno
+(98.9891% / 36,546 / 0) and Captain America (99.0722% / 32,605 / 0) built and
+stayed alive for the full 60-second run, every number unchanged. Forza
+Horizon builds and keeps its numbers, and dies on start roughly two runs in
+three with `0xC0000005` in `sub_82D3CD48` or `sub_82D3DB00`; rebuilding it
+with today's app source reverted reproduces exactly that, so it is the
+title's own intermittent startup crash and not a regression. Spider-Man and
+FIFA Street still fail to build on their existing backlog causes.
+
 ## 2.36.3 — "one label too many" (2026-09-05)
 
 **Captain America's video plays.** The Marvel intro decodes cleanly, in colour,

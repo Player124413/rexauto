@@ -1,5 +1,29 @@
 # Changelog
 
+## 2.36.5 — "pick your build" (2026-09-05)
+
+**The patch list shows up again.** Forza Horizon's patch panel was empty, and so
+was the panel for every title the catalogue does not cover — for two different
+reasons, neither of them visible.
+
+*A title with several patch files showed none of them.* The community catalogue
+publishes one file per build: `4D5309C9 - Forza Horizon.patch.toml`, a `(TU4)`
+one, and `4D5309C9 - Forza Horizon (E3 Demo).patch.toml`. Their addresses are
+not interchangeable, so rexauto picks one — by whether the port has a title
+update staged. That signal separates TU from base and says nothing about a demo,
+so Forza tied and the tie was a hard error: the panel rendered the message
+"ambiguo: 2 variantes casam" and no patches at all. It is now a choice. The
+plainest name wins by default (a variant qualifies itself in parentheses; the
+retail build does not), a dropdown offers the others, and the pick is remembered
+in `patch_variant.txt` next to the port so the next build applies the same file.
+Forza Horizon offers its 4 patches, and switching to the demo build shows that
+file's single patch instead.
+
+*A title with no patches said nothing.* Captain America, Spider-Man and DBZ
+Budokai have no entry in the catalogue at all — 482 files, none for those IDs.
+The panel simply came up blank, which reads like a failure. It now says so, with
+the title ID it looked for.
+
 ## 2.36.4 — "double-click" (2026-09-05)
 
 **A built port starts by double-clicking it.** Two things stood between a

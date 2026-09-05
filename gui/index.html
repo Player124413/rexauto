@@ -556,6 +556,29 @@ function renderPatches(c){
       '(run the pipeline), plus network access to fetch it.</div>';
     pnote.textContent=''; return;
   }
+  /* Several catalogue files can carry the same title ID -- a retail build and a
+     demo, say -- and their addresses are not interchangeable. Offer the choice
+     instead of guessing silently. */
+  if((c.variants||[]).length>1){
+    const sel=document.createElement('div');
+    sel.className='pnote';
+    const opts=c.variants.map(v=>'<option value="'+esc(v)+'"'+(v===c.variant?' selected':'')+'>'+
+      esc(v.replace(/^[0-9A-Fa-f]{8} - /,'').replace(/\.patch\.toml$/,''))+'</option>').join('');
+    sel.innerHTML='This title has '+c.variants.length+' patch files. Build: '+
+      '<select id="pvariant">'+opts+'</select>';
+    plist.appendChild(sel);
+    sel.querySelector('#pvariant').onchange=async e=>{
+      plist.innerHTML='<div class="pnote">loading catalogue&hellip;</div>';
+      const r=await fetch('/api/patches?name='+encodeURIComponent(projName())+
+                          '&variant='+encodeURIComponent(e.target.value));
+      const cc=await r.json(); renderPatches(cc); patchSel=selectedPatches();
+    };
+  }
+  if(c.empty){
+    plist.insertAdjacentHTML('beforeend','<div class="pnote">No community patches are '+
+      'published for this title (ID '+esc(c.title_id||'?')+'). Nothing to choose here.</div>');
+    pnote.textContent=''; syncPatchBtn(c); return;
+  }
   const sealCls={RECOMPILAR:'rec',RUNTIME:'run',INVALIDO:'bad'};
   (c.patches||[]).forEach(p=>{
     const row=document.createElement('label');
@@ -602,7 +625,8 @@ document.getElementById('psave').onclick=async()=>{
   pnote.textContent='saving…';
   try{
     const r=await fetch('/api/patches',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({name:projName(),patches:wanted})});
+      body:JSON.stringify({name:projName(),patches:wanted,
+                           variant:(document.getElementById('pvariant')||{}).value||''})});
     const j=await r.json();
     if(!j.ok){pnote.textContent='failed: '+(j.error||'unknown');return;}
     patchSel=wanted;

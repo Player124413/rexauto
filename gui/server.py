@@ -272,6 +272,12 @@ class Handler(BaseHTTPRequestHandler):
             if not name:
                 return self._send(200, "application/json",
                                   json.dumps({"error": "sem nome de projeto", "patches": []}))
+            # Some titles publish several catalogue files for the same ID (Forza
+            # Horizon ships retail and an "(E3 Demo)" one) and the addresses are
+            # not interchangeable. Picking one here remembers it next to the port.
+            variant = (q.get("variant") or [""])[0].strip()
+            if variant:
+                _gamepatches.write_variant(_port_dir(name), variant)
             return self._send(200, "application/json",
                               json.dumps(_gamepatches.catalog(_port_dir(name))))
         if u.path == "/api/deps":
@@ -332,6 +338,9 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/patches":
             name = (data.get("name") or "").strip()
             wanted = data.get("patches") or []
+            variant = (data.get("variant") or "").strip()
+            if variant:
+                _gamepatches.write_variant(_port_dir(name), variant)
             try:
                 r = _gamepatches.apply(_port_dir(name), wanted)
             except Exception as e:

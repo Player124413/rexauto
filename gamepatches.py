@@ -23,6 +23,7 @@ Uso:
 """
 import glob
 import json
+import io
 import os
 import re
 import struct
@@ -208,11 +209,61 @@ def files_for_title(tid, port_dir=None):
     tu_like = [h for h in hits if re.search(r"\(TU\d+\)", h)]
     base_like = [h for h in hits if h not in tu_like]
     chosen = (tu_like or hits) if has_tu else (base_like or hits)
-    if len(chosen) > 1:
-        raise SystemExit(
-            "ambiguo: %d variantes casam e nao da para desempatar sem hash do codigo:\n  %s"
-            % (len(chosen), "\n  ".join(chosen)))
-    return chosen
+    if len(chosen) == 1:
+        return chosen
+    # Still tied -- Forza Horizon publishes a retail file and an "(E3 Demo)" one,
+    # and the .xexp signal says nothing about those. Refusing outright is what
+    # made the screen show nothing at all for that title, so pick the plainest
+    # name (a variant qualifies itself in parentheses; the retail build does not)
+    # and let the caller override with `variant`. A saved choice always wins.
+    saved = read_variant(port_dir)
+    if saved and saved in chosen:
+        return [saved]
+    plain = sorted(chosen, key=lambda h: (h.count("("), len(h)))
+    return [plain[0]]
+
+
+def variants_for_title(tid, port_dir=None):
+    """Every catalogue file for this title that could be the port's build, in the
+    order the screen should offer them (the chosen one first). One entry means
+    there is nothing to choose."""
+    idx = catalog_index()
+    hits = [x["name"] for x in idx if x["name"].upper().startswith(tid.upper())]
+    if len(hits) <= 1 or port_dir is None:
+        return hits
+    has_tu = _port_has_tu(port_dir)
+    tu_like = [h for h in hits if re.search(r"\(TU\d+\)", h)]
+    base_like = [h for h in hits if h not in tu_like]
+    plausible = (tu_like or hits) if has_tu else (base_like or hits)
+    if len(plausible) <= 1:
+        return plausible
+    picked = files_for_title(tid, port_dir)
+    first = picked[0] if picked else plausible[0]
+    return [first] + [h for h in plausible if h != first]
+
+
+def _variant_file(port_dir):
+    return os.path.join(port_dir, "patch_variant.txt")
+
+
+def read_variant(port_dir):
+    """The catalogue file the user picked for this port, or None."""
+    try:
+        v = io.open(_variant_file(port_dir), encoding="utf-8").read().strip()
+    except OSError:
+        return None
+    return v or None
+
+
+def write_variant(port_dir, name):
+    """Remember the pick next to the port, so a later build applies the same file."""
+    try:
+        if name:
+            io.open(_variant_file(port_dir), "w", encoding="utf-8").write(name + "\n")
+        elif os.path.exists(_variant_file(port_dir)):
+            os.remove(_variant_file(port_dir))
+    except OSError:
+        pass
 
 
 def fetch_patch_file(fname):
@@ -444,7 +495,7 @@ def catalog(port_dir, only_file=None):
     lista sai vazia.
     """
     out = {"name": None, "title_id": None, "modules": [], "patches": [],
-           "files": [], "error": None}
+           "files": [], "variants": [], "variant": None, "empty": False, "error": None}
     try:
         name, tid, mods = port_identity(port_dir)
     except SystemExit as e:
@@ -462,6 +513,7 @@ def catalog(port_dir, only_file=None):
         return out
     try:
         files = [only_file] if only_file else files_for_title(tid, port_dir)
+        variants = [only_file] if only_file else variants_for_title(tid, port_dir)
     except SystemExit as e:
         out["error"] = str(e)
         return out
@@ -469,6 +521,12 @@ def catalog(port_dir, only_file=None):
         out["error"] = "catalogo indisponivel: %s" % e
         return out
     out["files"] = list(files)
+    out["variants"] = list(variants)
+    out["variant"] = files[0] if files else None
+    if not files:
+        # Not an error: most titles simply have no published patches. Saying so
+        # is the difference between an empty panel and an answer.
+        out["empty"] = True
     applied = applied_names(port_dir)
     for fname in files:
         try:

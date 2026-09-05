@@ -4162,7 +4162,7 @@ def verify_sdk_floor(env):
 # built from, so anyone can rebuild the bundled SDK from that branch.
 # The release this source belongs to. The GUI's Setup fetches the SDK of THIS
 # tag, never "latest": a newer release's SDK would fail this build's pin.
-REXAUTO_VERSION = "2.36.4"
+REXAUTO_VERSION = "2.36.5"
 
 SDK_PIN = {
     # v2.35: ReXGlue v0.10.0 becomes the default SDK, built from source with four

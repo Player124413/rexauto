@@ -108,6 +108,24 @@ Stages are checkpointed (re-running skips finished ones). Flags: `--from <stage>
 `--only <stage>`, `--no-jumptables`. Tool paths come from the usual install locations, `PATH`,
 or env vars (`REXGLUE`, `REXSDK_DIR`, `IDAT`, `CLANG`, `VCVARS`, `PYTHON`, `JT_REPO`).
 
+## One click from a phone (GitHub Actions)
+
+No PC handy? The repo ships a workflow that does the whole pipeline on a hosted Windows runner:
+
+1. Upload `default.xex` (or the ISO / GoD / STFS / a `.zip` with one) anywhere that gives a
+   link — Google Drive, Dropbox, or any direct URL.
+2. **Actions → Recompile game → Run workflow**, paste the link, pick a project name, press
+   the green button.
+3. When it finishes, the `port-<name>` artifact holds `<name>.exe`, the runtime DLLs and
+   `play <name>.cmd`; `logs-<name>` has every log; `gabarito-<name>` has the cures the heal
+   loop found (drop them into `gabaritos/` to skip the heal next time).
+
+The runner installs the pinned ReXGlue SDK by itself (cached across runs) and uses the
+clang / VS Build Tools already on `windows-latest`. IDA isn't available there, so the
+jumptables stage is skipped; the run-heal loop is on by default (`runheal` input) and can
+be turned off for a quick build-only pass. Unzip the artifact next to the game folder on a
+PC and run `play <name>.cmd` to test.
+
 ## What it does NOT do
 
 rexauto gets you to a **booting, guest-code-executing build, automatically**. It does **not**

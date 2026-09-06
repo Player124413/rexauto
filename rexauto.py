@@ -4464,6 +4464,8 @@ def main():
     ap.add_argument("--run", action="store_true", help="launch the game at the end")
     ap.add_argument("--from", dest="from_stage", choices=STAGES, help="restart from this stage")
     ap.add_argument("--only", choices=STAGES, help="run just this stage")
+    ap.add_argument("--until", dest="until_stage", choices=STAGES,
+                    help="stop after this stage (e.g. --until build skips runheal)")
     ap.add_argument("--no-jumptables", action="store_true")
     ap.add_argument("--no-title-update", action="store_true",
                     help="do not auto-detect/apply an Xbox 360 title update (.xexp); "
@@ -4531,6 +4533,10 @@ def main():
            "build": stage_build, "runheal": stage_runheal, "run": stage_run}
     start = order.index(args.from_stage) if args.from_stage else 0
     selected = [args.only] if args.only else order[start:]
+    if args.until_stage and not args.only:
+        if args.until_stage not in selected:
+            raise SystemExit("--until %s: that stage is not in the selected range" % args.until_stage)
+        selected = selected[:selected.index(args.until_stage) + 1]
 
     # The two log lines below are a public interface -- the GUI's stage tracker
     # string-matches "=== stage: " and "skip ... (done)" off this stdout (gui/

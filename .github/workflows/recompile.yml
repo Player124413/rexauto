@@ -1,0 +1,233 @@
+# One-click recompile from a phone: Actions -> "Recompile game" -> Run workflow,
+# paste a link to default.xex (or an ISO / GoD / STFS / zip containing one) and
+# press the button. The finished port (game .exe + runtime DLLs + play .cmd)
+# comes back as a downloadable artifact.
+#
+# Runner: windows-latest already ships VS Build Tools, LLVM/clang, CMake, Ninja,
+# Python and 7-Zip. The only thing installed here is the ReXGlue SDK -- the exact
+# build pinned by rexauto.py (SDK_PIN), taken from this release's tag like the
+# GUI's Setup does. IDA is commercial and not available, so the jumptables stage
+# is skipped; the recompiler's own switch handling still applies.
+#
+# runheal (launch the game, register what the dispatcher misses, rebuild) works
+# on a hosted runner too -- the game opens a window on the runner's desktop --
+# but a 360s confirm window per launch makes it slow. It is ON by default with a
+# capped iteration count; turn it off for a quick "does it build" pass.
+
+name: Recompile game
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "Link to default.xex / ISO / GoD / STFS / .zip (direct, Google Drive or Dropbox)"
+        required: true
+        type: string
+      name:
+        description: "Project name (a-z0-9_) -- becomes the .exe name"
+        required: true
+        default: "game"
+        type: string
+      runheal:
+        description: "Run the self-heal loop (launches the game on the runner; slower, better exe)"
+        required: false
+        default: true
+        type: boolean
+      heal_iters:
+        description: "Max run-heal iterations"
+        required: false
+        default: "6"
+        type: string
+      patches:
+        description: "Community patches to compile in, separated by ';' (e.g. Unlock FPS;Disable Film Grain)"
+        required: false
+        default: ""
+        type: string
+      sdk_url:
+        description: "Override ReXGlue SDK zip URL (leave empty for the pinned one)"
+        required: false
+        default: ""
+        type: string
+
+run-name: "Recompile ${{ inputs.name }}"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: recompile-${{ inputs.name }}
+  cancel-in-progress: false
+
+jobs:
+  recompile:
+    name: "${{ inputs.name }} on windows"
+    runs-on: windows-latest
+    timeout-minutes: 350
+    env:
+      REXAUTO_WORK: ${{ github.workspace }}\autoports
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: "utf-8"
+    steps:
+      - name: Validate inputs
+        shell: pwsh
+        run: |
+          $name = "${{ inputs.name }}"
+          if ($name -notmatch '^[a-z0-9_]{1,40}$') {
+            Write-Host "::error::project name must match [a-z0-9_] (got '$name')"
+            exit 1
+          }
+          $url = "${{ inputs.url }}".Trim()
+          if ($url -notmatch '^https?://') {
+            Write-Host "::error::url must start with http:// or https://"
+            exit 1
+          }
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Python deps
+        shell: pwsh
+        run: python -m pip install -q --upgrade pip pillow
+
+      - name: Toolchain report
+        shell: pwsh
+        run: |
+          Write-Host "clang:  $((Get-Command clang -ErrorAction SilentlyContinue).Source)"
+          clang --version | Select-Object -First 1
+          Write-Host "cmake:  $((Get-Command cmake).Source)"
+          cmake --version | Select-Object -First 1
+          Write-Host "ninja:  $((Get-Command ninja -ErrorAction SilentlyContinue).Source)"
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath
+          Write-Host "vs:     $vs"
+          $vcvars = Join-Path $vs "VC\Auxiliary\Build\vcvars64.bat"
+          if (-not (Test-Path $vcvars)) { Write-Host "::error::vcvars64.bat not found"; exit 1 }
+          "VCVARS=$vcvars" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          # rexauto only probes Program Files (x86) for vcvars; the hosted image
+          # installs VS under Program Files, so hand it the path explicitly.
+          if (-not (Get-Command clang -ErrorAction SilentlyContinue)) {
+            "CLANG=$env:ProgramFiles\LLVM\bin\clang.exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            "CLANGXX=$env:ProgramFiles\LLVM\bin\clang++.exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          }
+
+      - name: Resolve pinned SDK URL
+        id: sdk
+        shell: pwsh
+        run: |
+          $override = "${{ inputs.sdk_url }}".Trim()
+          if ($override) { $url = $override } else { $url = (python tools/ci_sdk.py url) }
+          Write-Host "SDK: $url"
+          "url=$url" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Cache ReXGlue SDK
+        id: sdk-cache
+        uses: actions/cache@v4
+        with:
+          path: rexglue
+          key: rexglue-sdk-${{ hashFiles('rexauto.py') }}-${{ steps.sdk.outputs.url }}
+
+      - name: Install ReXGlue SDK
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        env:
+          REXGLUE_BUNDLE_URL: ${{ steps.sdk.outputs.url }}
+        run: python tools/ci_sdk.py install
+
+      - name: Verify SDK pin
+        shell: pwsh
+        run: python tools/ci_sdk.py verify
+
+      - name: Download game input
+        id: fetch
+        shell: pwsh
+        run: python tools/ci_fetch.py "${{ inputs.url }}" "${{ runner.temp }}\input"
+
+      - name: Recompile
+        shell: pwsh
+        run: |
+          $args = @("${{ steps.fetch.outputs.container }}", "--name", "${{ inputs.name }}",
+                    "--no-jumptables", "--heal-iters", "${{ inputs.heal_iters }}", "--publish-gabarito")
+          $patches = "${{ inputs.patches }}"
+          foreach ($p in ($patches -split ';')) { $p = $p.Trim(); if ($p) { $args += @("--patch", $p) } }
+          if ("${{ inputs.runheal }}" -ne "true") {
+            Write-Host "runheal disabled -> stopping after build"
+            $args += @("--until", "build")
+          }
+          Write-Host "python rexauto.py $args"
+          python rexauto.py @args
+          exit $LASTEXITCODE
+
+      - name: Collect port
+        if: always()
+        shell: pwsh
+        run: |
+          $name = "${{ inputs.name }}"
+          $work = "$env:REXAUTO_WORK\$name"
+          $bd = "$work\port\out\build\win-amd64-release"
+          $out = "${{ runner.temp }}\port-$name"
+          New-Item -ItemType Directory -Force $out | Out-Null
+          if (Test-Path "$bd\$name.exe") {
+            Copy-Item "$bd\$name.exe" $out
+            Get-ChildItem $bd -Filter *.dll | Copy-Item -Destination $out
+            Get-ChildItem $bd -Filter "play*.cmd" | Copy-Item -Destination $out
+            Get-ChildItem $bd -Filter *.pdb -ErrorAction SilentlyContinue | Copy-Item -Destination $out
+            "exe=true" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            $mb = [math]::Round((Get-Item "$bd\$name.exe").Length / 1MB, 1)
+            "### ✅ $name.exe built ($mb MB)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          } else {
+            "### ❌ no $name.exe produced -- see the logs artifact" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          }
+          # project sources: manifest + cures (functions.toml) so the port can be
+          # rebuilt / continued on a PC without redoing the heal
+          $meta = "$out\project"
+          New-Item -ItemType Directory -Force $meta | Out-Null
+          Get-ChildItem "$work\port" -File -Filter *.toml -ErrorAction SilentlyContinue | Copy-Item -Destination $meta
+          Get-ChildItem "$work\port" -File -Filter *.json -ErrorAction SilentlyContinue | Copy-Item -Destination $meta
+          Copy-Item "$work\.rexauto_state" $meta -ErrorAction SilentlyContinue
+          # logs
+          $logs = "${{ runner.temp }}\logs-$name"
+          New-Item -ItemType Directory -Force $logs | Out-Null
+          Get-ChildItem $work -File -Filter *.log -ErrorAction SilentlyContinue | Copy-Item -Destination $logs
+          Get-ChildItem "$work\port" -File -Filter *.log -ErrorAction SilentlyContinue | Copy-Item -Destination $logs
+          Get-ChildItem $bd -File -Filter *.log -ErrorAction SilentlyContinue | Copy-Item -Destination $logs
+          "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "Unzip the port artifact next to your game folder and run ``play $name.cmd`` (or ``$name.exe --game_data_root=<game folder>``)." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      - name: Upload port
+        if: always() && env.exe == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: port-${{ inputs.name }}
+          path: ${{ runner.temp }}\port-${{ inputs.name }}
+          compression-level: 6
+          retention-days: 14
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-${{ inputs.name }}
+          path: ${{ runner.temp }}\logs-${{ inputs.name }}
+          if-no-files-found: ignore
+          retention-days: 14
+
+      # cures discovered by the heal loop, keyed by the xex hash -- commit these
+      # to gabaritos/ and the next run of the same binary skips most of the heal
+      - name: Upload gabarito (cures)
+        if: always()
+        shell: pwsh
+        run: |
+          $new = git status --porcelain gabaritos | ForEach-Object { $_.Substring(3) }
+          if ($new) { $new | Out-File "${{ runner.temp }}\gabarito-list.txt"; Write-Host "new gabaritos: $new" }
+          else { Write-Host "no new gabarito" }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gabarito-${{ inputs.name }}
+          path: gabaritos/*.toml
+          if-no-files-found: ignore
+          retention-days: 30

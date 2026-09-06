@@ -158,8 +158,18 @@ jobs:
             $args += @("--until", "build")
           }
           Write-Host "python rexauto.py $args"
-          python rexauto.py @args
-          exit $LASTEXITCODE
+          New-Item -ItemType Directory -Force "$env:REXAUTO_WORK\${{ inputs.name }}" | Out-Null
+          python rexauto.py @args 2>&1 | Tee-Object -FilePath "$env:REXAUTO_WORK\${{ inputs.name }}\_pipeline.log"
+          $rc = $LASTEXITCODE
+          if ($rc) {
+            "<details><summary>pipeline log (rexauto lines)</summary>" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            '```' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            Get-Content "$env:REXAUTO_WORK\${{ inputs.name }}\_pipeline.log" | Select-String -Pattern '\[rexauto\]' | Where-Object { $_.Line -notmatch '@build' } | Select-Object -Last 80 | ForEach-Object { $_.Line.Substring(0, [math]::Min(300, $_.Line.Length)) } | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            '```' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            "</details>" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          }
+          exit $rc
 
       - name: Collect port
         if: always()
@@ -180,6 +190,16 @@ jobs:
             "### ✅ $name.exe built ($mb MB)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           } else {
             "### ❌ no $name.exe produced -- see the logs artifact" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            $bl = "$work\_build.log"
+            if (Test-Path $bl) {
+              "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+              "<details><summary>compiler errors (last build)</summary>" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+              "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+              '```' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+              Get-Content $bl | Select-String -Pattern 'error:|error LNK|FAILED:|LLVM ERROR|undefined symbol|RC=' | Select-Object -First 60 | ForEach-Object { $_.Line.Substring(0, [math]::Min(300, $_.Line.Length)) } | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+              '```' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+              "</details>" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+            }
           }
           # project sources: manifest + cures (functions.toml) so the port can be
           # rebuilt / continued on a PC without redoing the heal

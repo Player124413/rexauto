@@ -3301,6 +3301,32 @@ def stage_build(ctx):
                  tuple(sorted((a, e) for a, e in _heal.load_overrides(o.functions).items() if e)))
                 for o in _heal_owners(ctx))
             if (nf + nb) == 0 or state == last_ends:
+                # Tier 3: neither a forced landing nor a boundary extension took
+                # (Scott Pilgrim's 0x82635368: the target sits past another
+                # registered entry, so heal_boundaries refuses to reach, and the
+                # forced landing was retired because the SDK emitted no label).
+                # What is left is the classic mid-flow split: make the target a
+                # function ENTRY. classifyTarget then sees a real function and
+                # lowers the dangling `goto loc_T` to `sub_T(ctx, base); return;`
+                # -- a tail call, which is exactly what a branch into another
+                # routine's body is. Registered once per address; a target that
+                # produces no definition is dropped by the next codegen's
+                # emitted-symbols check like every other speculative cure.
+                nreg = 0
+                for owner, olog in _build_log_by_owner(ctx, logp):
+                    dangling = _heal.forced_landings_from_log(olog)
+                    have = _heal.load_overrides_full(owner.functions)
+                    tried = set(owner.load_state().get("split_entries") or [])
+                    new = [a for a in dangling if a not in have and a not in tried]
+                    if new:
+                        nreg += _heal.register_functions(new, owner.functions)
+                        owner.mark("split_entries", sorted(tried | set(new)))
+                        owner.log("  registered %d dangling branch target(s) as function "
+                                  "entries (split -> tail call): %s"
+                                  % (len(new), ", ".join("0x%08X" % a for a in new)))
+                if nreg:
+                    last_ends = None
+                    continue
                 ctx.log("  undeclared-label heal not converging (no new fix) -> see %s" % logp)
                 break
             last_ends = state
@@ -4029,10 +4055,20 @@ def stage_runheal(ctx):
             elif "use of undeclared label" in _txt:
                 plain_fails = 0
                 for owner, olog in _build_log_by_owner(ctx, logp):
-                    if _heal.write_forced(owner.forced, _heal.forced_landings_from_log(olog)):
+                    dangling = _heal.forced_landings_from_log(olog)
+                    fixed = 0
+                    if _heal.write_forced(owner.forced, dangling):
                         _heal.ensure_manifest_include(owner.manifest,
                                                       os.path.basename(owner.forced))
-                    _heal.heal_boundaries(olog, owner.gen, owner.functions, owner.forced)
+                        fixed += 1
+                    fixed += _heal.heal_boundaries(olog, owner.gen, owner.functions, owner.forced)
+                    if not fixed:
+                        # same tier-3 fallback as stage_build: split -> tail call
+                        have = _heal.load_overrides_full(owner.functions)
+                        new = [a for a in dangling if a not in have]
+                        if new and _heal.register_functions(new, owner.functions):
+                            owner.log("  registered %d dangling branch target(s) as "
+                                      "function entries (split -> tail call)" % len(new))
                 do_codegen(ctx)
             else:
                 plain_fails += 1

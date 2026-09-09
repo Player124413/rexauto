@@ -34,7 +34,7 @@
             android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenLayout|uiMode|screenSize|smallestScreenSize|density"
             android:exported="false"
             android:launchMode="singleTask"
-            android:screenOrientation="portrait" />
+            android:screenOrientation="sensorLandscape" />
     </application>
 
 </manifest>

@@ -47,6 +47,6 @@
     <string name="err_driver_zip">%1$s is not a driver pack: expected a zip with meta.json and a libvulkan_*.so (Turnip / Adreno driver zips from Yuzu, Skyline, Dolphin or Winlator work as-is).</string>
     <string name="gfx_orientation">Screen orientation while playing</string>
     <string name="orient_portrait">Portrait (vertical)</string>
-    <string name="orient_landscape">Landscape (horizontal)</string>
+    <string name="orient_landscape">Landscape (horizontal, default)</string>
     <string name="orient_auto">Follow device rotation</string>
 </resources>

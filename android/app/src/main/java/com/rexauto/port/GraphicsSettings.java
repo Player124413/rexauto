@@ -48,8 +48,8 @@ public final class GraphicsSettings {
     public boolean tolerant() { return prefs.getBoolean("tolerant", true); }
     public void setTolerant(boolean v) { prefs.edit().putBoolean("tolerant", v).apply(); }
 
-    /** Screen orientation while playing: portrait (default) | landscape | auto. */
-    public String orientation() { return prefs.getString("orientation", "portrait"); }
+    /** Screen orientation while playing: landscape (default) | portrait | auto. */
+    public String orientation() { return prefs.getString("orientation", "landscape"); }
     public void setOrientation(String v) { prefs.edit().putString("orientation", v).apply(); }
 
     /** Extra raw cvars (advanced): "key=value" per line. */

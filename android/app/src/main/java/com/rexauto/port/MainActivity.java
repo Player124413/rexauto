@@ -28,14 +28,14 @@ public class MainActivity extends SDLActivity {
         }
     }
 
-    /** Orientation chosen in the launcher (Graphics dialog); portrait by default. */
+    /** Orientation chosen in the launcher (Graphics dialog); landscape by default. */
     private void applyOrientation() {
         String o = new GraphicsSettings(this).orientation();
         int req;
         switch (o) {
-            case "landscape": req = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE; break;
+            case "portrait": req = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT; break;
             case "auto": req = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_FULL_USER; break;
-            default: req = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT;
+            default: req = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE;
         }
         setRequestedOrientation(req);
     }

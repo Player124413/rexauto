@@ -500,9 +500,9 @@ public class SetupActivity extends Activity {
 
         label(box, R.string.gfx_orientation);
         Spinner orient = new Spinner(this);
-        String[] orients = {"portrait", "landscape", "auto"};
+        String[] orients = {"landscape", "portrait", "auto"};
         orient.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item,
-                new String[]{getString(R.string.orient_portrait), getString(R.string.orient_landscape), getString(R.string.orient_auto)}));
+                new String[]{getString(R.string.orient_landscape), getString(R.string.orient_portrait), getString(R.string.orient_auto)}));
         for (int i = 0; i < orients.length; i++) if (orients[i].equals(gs.orientation())) orient.setSelection(i);
         box.addView(orient);
 

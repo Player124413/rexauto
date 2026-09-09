@@ -116,8 +116,10 @@ No PC handy? The repo ships a workflow that does the whole pipeline on a hosted 
    link — Google Drive, Dropbox, or any direct URL.
 2. **Actions → Recompile game → Run workflow**, paste the link, pick a project name, press
    the green button.
-3. When it finishes, the `port-<name>` artifact holds `<name>.exe`, the runtime DLLs and
-   `play <name>.cmd`; `logs-<name>` has every log; `gabarito-<name>` has the cures the heal
+3. When it finishes, the `port-<name>` artifact holds **`<Title> Launcher.exe`** (pick your
+   ISO / XBLA-STFS / GoD / default.xex -> unpacked into `assets\`, Graphics & performance
+   presets, Play -- the desktop twin of the Android launcher), `<name>.exe`, the runtime DLLs
+   and `play <name>.cmd`; `logs-<name>` has every log; `gabarito-<name>` has the cures the heal
    loop found (drop them into `gabaritos/` to skip the heal next time); `source-<name>` is
    the full recompiled project (generated C++, `src/`, `*.toml`, CMake files) for rebuilding
    or patching the port on a PC.

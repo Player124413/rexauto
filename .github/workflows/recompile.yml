@@ -186,6 +186,37 @@ jobs:
             Get-ChildItem $bd -Filter *.dll | Copy-Item -Destination $out
             Get-ChildItem $bd -Filter "play*.cmd" | Copy-Item -Destination $out
             Get-ChildItem $bd -Filter *.pdb -ErrorAction SilentlyContinue | Copy-Item -Destination $out
+            # --- launcher (same UX as the Android app: pick ISO/STFS/GoD/xex,
+            # graphics & performance, Play) -> "<name> Launcher.exe"
+            python -m pip install -q pyinstaller
+            $meta = "${{ runner.temp }}\meta"
+            New-Item -ItemType Directory -Force $meta | Out-Null
+            $tm = python tools/title_meta.py "${{ steps.fetch.outputs.container }}" $meta 2>$null | Select-Object -Last 1
+            try { $tj = $tm | ConvertFrom-Json } catch { $tj = $null }
+            $gpu = (Get-ChildItem $bd -Filter "rexgpu-*.dll" | Select-Object -First 1)
+            $gpuName = if ($gpu) { $gpu.BaseName.Substring(7) } else { "" }
+            @{ name = $name; title = $(if ($tj) { $tj.title } else { $name }); title_id = $(if ($tj) { $tj.title_id } else { "" }); gpu_plugin = $gpuName } |
+              ConvertTo-Json | Out-File "$out\port.json" -Encoding utf8
+            if (Test-Path "$meta\cover.png") { Copy-Item "$meta\cover.png" "$out\cover.png" }
+            $ico = "$work\port\src\$name.ico"
+            if (-not (Test-Path $ico)) { $ico = "gui\rexauto.ico" }
+            Copy-Item $ico "$out\launcher.ico"
+            $ltitle = if ($tj -and $tj.title) { [string]$tj.title } else { $name }
+            $ltitle = $ltitle -replace '[^A-Za-z0-9 _.\-]', ''
+            if (-not $ltitle.Trim()) { $ltitle = $name }
+            $lname = "$($ltitle.Trim()) Launcher"
+            python -m PyInstaller --noconfirm --clean --onefile --windowed --name "$lname" --icon "$ico" `
+              --add-data "extract.py;." --hidden-import extract `
+              --distpath "${{ runner.temp }}\launcher-dist" --workpath "${{ runner.temp }}\launcher-build" `
+              --specpath "${{ runner.temp }}\launcher-build" tools/win_launcher.py 2>&1 | Select-Object -Last 3
+            if (Test-Path "${{ runner.temp }}\launcher-dist\$lname.exe") {
+              Copy-Item "${{ runner.temp }}\launcher-dist\$lname.exe" $out
+              "launcher: $lname.exe" | Write-Host
+            } else {
+              Write-Host "::warning::launcher exe not built - shipping the script instead"
+              Copy-Item tools\win_launcher.py $out
+              Copy-Item extract.py $out
+            }
             # portable layout: the exe looks for the game in assets/ (then game/, data/)
             # next to itself -- drop the game files there, no paths to edit anywhere
             New-Item -ItemType Directory -Force "$out\assets" | Out-Null
@@ -196,7 +227,8 @@ jobs:
               "Saves/config/cache are written to userdata\ next to the exe.",
               "Works from any drive / folder / Winlator prefix - no absolute paths involved.",
               "",
-              "Start: play $name.cmd   (or $name.exe directly)"
+              "Start: the *Launcher.exe (pick your ISO/XBLA/GoD there, set graphics, Play)",
+              "   or: play $name.cmd   (or $name.exe directly)"
             ) | Out-File "$out\assets\PUT_GAME_FILES_HERE.txt" -Encoding utf8
             "exe=true" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
             $mb = [math]::Round((Get-Item "$bd\$name.exe").Length / 1MB, 1)
@@ -228,7 +260,7 @@ jobs:
           Get-ChildItem "$work\port" -File -Filter *.log -ErrorAction SilentlyContinue | Copy-Item -Destination $logs
           Get-ChildItem $bd -File -Filter *.log -ErrorAction SilentlyContinue | Copy-Item -Destination $logs
           "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
-          "Unzip the port artifact, copy the game files (default.xex + the rest) into its ``assets\`` folder and run ``play $name.cmd`` or ``$name.exe``. No paths to edit - works on any PC / Winlator." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "Unzip the port artifact and run **``<Title> Launcher.exe``**: pick your ISO / XBLA package / GoD / default.xex there (it unpacks into ``assets\``), set **Graphics & performance**, press **Play**. Old way still works: drop the game files into ``assets\`` and run ``play $name.cmd``." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
       - name: Upload port
         if: always() && env.exe == 'true'

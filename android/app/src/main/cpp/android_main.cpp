@@ -203,6 +203,12 @@ int RunAndroidApp() {
   // coherency. Everything below can be overridden by settings.txt.
   args.emplace_back("--clear_memory_page_state=false");
   args.emplace_back("--fullscreen=true");
+  // GPU emulation plugin. On Windows the rexauto SDK auto-discovers
+  // rexgpu-*.dll beside the exe; on Android there is no such scan, and without
+  // it the kernel logs "no GPU emulation loaded (gpu_plugin not set)" and the
+  // title renders nothing. librexgpu-xenos.so ships in the APK; the SDK
+  // resolves "xenos" against nativeLibraryDir (SetAndroidApplicationContext).
+  args.emplace_back("--gpu_plugin=xenos");
   for (auto& a : ReadSettingsArgs(external_dir + "/" + kSettingsFileName)) {
     ALOGI("setting: %s", a.c_str());
     args.emplace_back(std::move(a));

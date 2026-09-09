@@ -27,7 +27,7 @@ sys.path.insert(0, ROOT)
 # rexauto fixes (the one SDK_PIN in rexauto.py describes by hash). Pinned by
 # tag, never "latest": a newer asset would fail the pin and refuse to run.
 REXGLUE_UPSTREAM_URL = ("https://github.com/xdzleo/rexglue-sdk/releases/download/"
-                        "v0.10.0-rexauto.2/rexglue-sdk-0.10.0-dev.g7236893-win-amd64.zip")
+                        "v0.10.0-rexauto.2/rexglue-sdk-win64.zip")
 REXGLUE_URL = os.environ.get("REXGLUE_BUNDLE_URL", REXGLUE_UPSTREAM_URL)
 
 

@@ -139,6 +139,13 @@ int RunAndroidApp() {
   rex::memory::AndroidInitialize();
   rex::filesystem::AndroidInitialize();
 
+  // The port's src/<name>_app.h carries rexauto's desktop "portable paths"
+  // hook (game in <exe>/assets, saves in <exe>/userdata). On Android the exe
+  // folder is the read-only nativeLibraryDir, so keep the explicit roots below
+  // authoritative: the hook honours these two env toggles.
+  setenv("REX_NO_PORTABLE_USERDATA", "1", 1);
+  unsetenv("REX_PORTABLE_ONLY");
+
   std::vector<std::string> args;
   args.emplace_back(kAppIdentifier);
   if (!game_root.empty()) {

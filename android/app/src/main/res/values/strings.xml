@@ -10,8 +10,8 @@
     <string name="status_copied">Copied %1$d file(s)… %2$s</string>
     <string name="status_done">Game installed</string>
     <string name="play">▶  Play</string>
-    <string name="pick_iso">Choose ISO / default.xex</string>
-    <string name="pick_folder">Choose extracted folder</string>
+    <string name="pick_iso">Choose ISO / XBLA package / default.xex</string>
+    <string name="pick_folder">Choose folder (extracted game or Games on Demand)</string>
     <string name="graphics">Graphics &amp; performance</string>
     <string name="reset">Remove game files</string>
     <string name="reset_confirm">Delete the extracted game files from this app\'s storage?</string>
@@ -20,6 +20,8 @@
     <string name="err_not_iso">%1$s is neither an Xbox 360 ISO nor a default.xex.</string>
     <string name="err_wrong_game">That is <b>%1$s</b>. This app is built for <b>%2$s</b> (Title ID %3$s) – please pick that game\'s disc image.</string>
     <string name="err_generic">Import failed.</string>
+    <string name="err_no_xex_in_stfs">%1$s is an Xbox 360 package but holds no default.xex (a save, DLC or title update?).</string>
+    <string name="err_god_needs_folder">%1$s is a multi-part Games on Demand image. Use <b>Choose folder</b> and pick the folder that holds both this file and its \"%1$s.data\" folder.</string>
 
     <string name="gfx_scale">Internal resolution</string>
     <string name="gfx_effect">Output filter</string>

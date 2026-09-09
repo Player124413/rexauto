@@ -140,9 +140,12 @@ artifact is a signed, installable APK:
 
 * the launcher shows **"<Game title> — Android Edition"** (title and Title ID are read from
   the xex; the name comes from a bundled 3 000-title Xbox 360 database);
-* **Choose ISO / default.xex** — pick the disc image on the phone; the app unpacks the GDFX
-  filesystem itself (also accepts a folder or a bare `default.xex`) into its private
-  storage. A dump of a **different title is refused** by Title ID;
+* **Choose ISO / XBLA package / default.xex** — pick the game on the phone; the app unpacks
+  it itself into its private storage: ISO (GDFX), **STFS** packages (CON/LIVE/PIRS — XBLA
+  and arcade titles), single-file **Games on Demand**, a bare `default.xex`. **Choose
+  folder** takes an already-extracted game or a multi-part GoD dump
+  (`<id>/<header>` + `<header>.data/Data0000…`). A dump of a **different title is
+  refused** by Title ID;
 * **Graphics & performance** — resolution scale, vsync, letterbox, "tolerant mode" (skip
   calls to unregistered functions instead of crashing), and the mobile perf flag
   `--clear_memory_page_state=false`;

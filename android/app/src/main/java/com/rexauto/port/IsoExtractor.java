@@ -19,7 +19,7 @@ import java.util.HashSet;
 import java.util.List;
 
 /**
- * Xbox 360 disc image (GDFX / XDVDFS) extractor - a Java port of the reader in
+ * Xbox 360 disc image (GDFX / XDVDFS) extractor; also the extraction engine for GoD via StfsExtractor.Svod - a Java port of the reader in
  * rexauto's extract.py. Handles plain ISOs and the usual redump/XGD offsets.
  * Also copies a bare default.xex or a folder pick through unchanged.
  */
@@ -37,10 +37,17 @@ public final class IsoExtractor {
         Entry(String rel, long sector, long size) { this.rel = rel; this.sector = sector; this.size = size; }
     }
 
-    private final FileChannel ch;
-    private final long base;
+    /** Random-access source of 2 KB GDFX sectors (plain ISO or an SVOD/GoD layout). */
+    public interface SectorSource {
+        void read(long sector, ByteBuffer dst) throws IOException;
+        /** Volume descriptor if the layout knows where it is (SVOD); null = sector 32. */
+        default ByteBuffer volumeDescriptor() throws IOException { return null; }
+        void close();
+    }
 
-    private IsoExtractor(FileChannel ch, long base) { this.ch = ch; this.base = base; }
+    private final SectorSource src;
+
+    IsoExtractor(SectorSource src) { this.src = src; }
 
     /** Opens a content:// or file path as an ISO; returns null if it is not GDFX. */
     public static IsoExtractor open(ContentResolver cr, Uri uri) throws IOException {
@@ -51,25 +58,43 @@ public final class IsoExtractor {
             if (b + 0x10000 + 20 > ch.size()) continue;
             ByteBuffer m = ByteBuffer.allocate(20);
             ch.read(m, b + 0x10000);
-            if (java.util.Arrays.equals(m.array(), GDFX_MAGIC)) return new IsoExtractor(ch, b);
+            if (java.util.Arrays.equals(m.array(), GDFX_MAGIC)) {
+                final long base = b;
+                return new IsoExtractor(new SectorSource() {
+                    @Override public void read(long sector, ByteBuffer dst) throws IOException {
+                        long off = base + sector * SECTOR;
+                        while (dst.hasRemaining()) {
+                            int n = ch.read(dst, off + dst.position());
+                            if (n <= 0) break;
+                        }
+                    }
+                    @Override public void close() { try { ch.close(); pfd.close(); } catch (IOException ignored) { } }
+                });
+            }
         }
         ch.close();
+        pfd.close();
         return null;
+    }
+
+    static boolean isGdfxMagic(ByteBuffer b) {
+        if (b.limit() < 20) return false;
+        for (int i = 0; i < 20; i++) if (b.get(i) != GDFX_MAGIC[i]) return false;
+        return true;
     }
 
     private ByteBuffer readSector(long sector, int nbytes) throws IOException {
         ByteBuffer buf = ByteBuffer.allocate(nbytes).order(ByteOrder.LITTLE_ENDIAN);
-        long off = base + sector * SECTOR;
-        while (buf.hasRemaining()) {
-            int n = ch.read(buf, off + buf.position());
-            if (n <= 0) break;
-        }
+        src.read(sector, buf);
         buf.flip();
         return buf;
     }
 
     public List<Entry> list() throws IOException {
-        ByteBuffer vd = readSector(32, SECTOR);
+        ByteBuffer vd = src.volumeDescriptor();
+        if (vd == null) vd = readSector(32, SECTOR);
+        vd.order(ByteOrder.LITTLE_ENDIAN);
+        if (!isGdfxMagic(vd)) throw new IOException("no GDFX volume (unsupported layout)");
         long rootSector = vd.getInt(0x14) & 0xFFFFFFFFL;
         long rootSize = vd.getInt(0x18) & 0xFFFFFFFFL;
         List<Entry> out = new ArrayList<>();
@@ -144,7 +169,7 @@ public final class IsoExtractor {
         return xex;
     }
 
-    public void close() { try { ch.close(); } catch (IOException ignored) { } }
+    public void close() { src.close(); }
 
     /** Plain stream copy used for a picked default.xex / loose files. */
     public static void copyStream(InputStream in, File dest) throws IOException {

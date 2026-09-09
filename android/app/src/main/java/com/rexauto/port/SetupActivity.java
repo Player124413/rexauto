@@ -211,6 +211,8 @@ public class SetupActivity extends Activity {
                     xex = iso.extractAll(dest, this::postProgress);
                     iso.close();
                     if (xex == null) throw new Exception(getString(R.string.err_no_xex_in_iso));
+                } else if ((xex = importPackage(uri, name, dest)) != null) {
+                    // CON/LIVE/PIRS handled
                 } else {
                     // not a disc: accept a raw default.xex
                     try (InputStream probe = getContentResolver().openInputStream(uri)) {
@@ -229,6 +231,41 @@ public class SetupActivity extends Activity {
         }, "import").start();
     }
 
+    /**
+     * CON / LIVE / PIRS picked as a single file: STFS (XBLA, arcade titles) is
+     * unpacked entry by entry; a single-file Games-on-Demand image goes through
+     * the GDFX path. A multi-part GoD needs its ".data" folder, so the user is
+     * pointed at the folder picker. Returns null when the file is not a package.
+     */
+    private File importPackage(Uri uri, String name, File dest) throws Exception {
+        java.nio.ByteBuffer hdr;
+        android.os.ParcelFileDescriptor pfd = getContentResolver().openFileDescriptor(uri, "r");
+        if (pfd == null) return null;
+        java.nio.channels.FileChannel ch = new java.io.FileInputStream(pfd.getFileDescriptor()).getChannel();
+        hdr = StfsExtractor.readHeader(ch);
+        if (hdr == null) { ch.close(); pfd.close(); return null; }
+        dest.mkdirs();
+        if (StfsExtractor.volumeType(hdr) == StfsExtractor.VOLUME_SVOD) {
+            ch.close(); pfd.close();
+            if (hdr.getInt(0x39D) > 1)
+                throw new Exception(getString(R.string.err_god_needs_folder, name));
+            StfsExtractor.Found f = new StfsExtractor.Found(uri, name, hdr, null);
+            post(getString(R.string.status_reading, name + " (Games on Demand)"));
+            IsoExtractor god = StfsExtractor.openSvod(getContentResolver(), f, null);
+            try {
+                File xex = god.extractAll(dest, this::postProgress);
+                if (xex == null) throw new Exception(getString(R.string.err_no_xex_in_iso));
+                return xex;
+            } finally { god.close(); }
+        }
+        post(getString(R.string.status_reading, name + " (STFS)"));
+        try {
+            File xex = new StfsExtractor.Stfs(ch, hdr).extractAll(dest, this::postProgress);
+            if (xex == null) throw new Exception(getString(R.string.err_no_xex_in_stfs, name));
+            return xex;
+        } finally { ch.close(); pfd.close(); }
+    }
+
     /** Already-extracted folder picked with the tree picker: copy it in. */
     private void importTree(Uri tree) {
         setBusy(true);
@@ -237,9 +274,26 @@ public class SetupActivity extends Activity {
             File dest = GameFiles.gameDir(this);
             try {
                 dest.mkdirs();
-                long[] counter = {0};
-                copyTree(tree, DocumentsContract.getTreeDocumentId(tree), dest, counter, 0);
-                File xex = findXex(dest, 0);
+                File xex;
+                StfsExtractor.Found pkg = StfsExtractor.findInTree(getContentResolver(), tree, DocumentsContract.getTreeDocumentId(tree), 0);
+                if (pkg != null && pkg.volumeType() == StfsExtractor.VOLUME_SVOD) {
+                    // Games on Demand dump: <id>/<header> + <header>.data/Data0000..
+                    post(getString(R.string.status_reading, pkg.name + " (Games on Demand)"));
+                    IsoExtractor god = StfsExtractor.openSvod(getContentResolver(), pkg, tree);
+                    try { xex = god.extractAll(dest, this::postProgress); } finally { god.close(); }
+                    if (xex == null) throw new Exception(getString(R.string.err_no_xex_in_iso));
+                } else if (pkg != null) {
+                    post(getString(R.string.status_reading, pkg.name + " (STFS)"));
+                    android.os.ParcelFileDescriptor pfd = getContentResolver().openFileDescriptor(pkg.headerDoc, "r");
+                    java.nio.channels.FileChannel ch = new java.io.FileInputStream(pfd.getFileDescriptor()).getChannel();
+                    try { xex = new StfsExtractor.Stfs(ch, pkg.hdr).extractAll(dest, this::postProgress); }
+                    finally { ch.close(); pfd.close(); }
+                    if (xex == null) throw new Exception(getString(R.string.err_no_xex_in_stfs, pkg.name));
+                } else {
+                    long[] counter = {0};
+                    copyTree(tree, DocumentsContract.getTreeDocumentId(tree), dest, counter, 0);
+                    xex = findXex(dest, 0);
+                }
                 if (xex == null) throw new Exception(getString(R.string.err_no_xex_in_folder));
                 finish(xex);
             } catch (Exception e) {

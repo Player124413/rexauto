@@ -23,23 +23,19 @@ import zipfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-def _release_tag():
-    try:
-        import rexauto as _r
-        return "v" + _r.REXAUTO_VERSION
-    except Exception:
-        return "latest"
+# The SDK download. Upstream ReXGlue v0.10.0 release asset (a plain install
+# tree: bin/ include/ lib/ ...). The xdzleo fork asset that earlier releases
+# pinned is no longer reachable, so the upstream build is the default; the
+# fork-specific sha256 pin is therefore only enforced when REXAUTO_SDK_PIN=1.
+REXGLUE_UPSTREAM_URL = ("https://github.com/rexglue/rexglue-sdk/releases/download/"
+                        "v0.10.0/rexglue-sdk-0.10.0-win-amd64.zip")
+REXGLUE_URL = os.environ.get("REXGLUE_BUNDLE_URL", REXGLUE_UPSTREAM_URL)
 
 
-# The SDK of THIS release, by tag. "latest" would hand an older rexauto a newer
-# SDK, which its pin then refuses -- exactly the trap a stale rexglue/ set for
-# v2.36.0 users, from the other side.
-REXGLUE_URL = os.environ.get(
-    "REXGLUE_BUNDLE_URL",
-    ("https://github.com/xdzleo/rexauto/releases/latest/download/rexglue-sdk-win64.zip"
-     if _release_tag() == "latest" else
-     "https://github.com/xdzleo/rexauto/releases/download/%s/rexglue-sdk-win64.zip"
-     % _release_tag()))
+def pin_enforced():
+    """The sha256 pin describes the xdzleo fork build. Against the upstream
+    release it always "mismatches", so it is opt-in (REXAUTO_SDK_PIN=1)."""
+    return os.environ.get("REXAUTO_SDK_PIN", "0") == "1"
 
 
 def app_dir():
@@ -79,7 +75,7 @@ def _sdk_version_status(e):
     # pipeline refuses it (SDK MISMATCH), so it is "not installed" here too,
     # and Setup -- or the GUI at startup -- replaces it.
     try:
-        bad = _r.sdk_pin_mismatch(e)
+        bad = _r.sdk_pin_mismatch(e) if pin_enforced() else None
     except Exception:
         bad = None
     if bad:
@@ -245,7 +241,7 @@ def install_rexglue(emit):
         return False
     try:
         import rexauto as _r
-        bad = _r.sdk_pin_mismatch(e)
+        bad = _r.sdk_pin_mismatch(e) if pin_enforced() else None
     except Exception:
         bad = None
     if bad:

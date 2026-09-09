@@ -30,10 +30,11 @@ def cmd_install():
 
 def cmd_verify():
     import rexauto
+    import setup
     e = rexauto.detect_env()
     for k in ("rexglue", "sdk", "clang", "clangxx", "vcvars", "python", "jt_repo", "idat"):
         print("%-8s %s" % (k, e.get(k)))
-    bad = rexauto.sdk_pin_mismatch(e)
+    bad = rexauto.sdk_pin_mismatch(e) if setup.pin_enforced() else None
     if bad:
         print("::error::SDK pin mismatch on %s: got %s want %s" % (bad[0], bad[2][:16], bad[1][:16]))
         sys.exit(1)

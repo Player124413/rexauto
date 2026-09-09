@@ -4441,12 +4441,9 @@ def verify_sdk_pin(env):
     rexglue = env.get("rexglue")
     if not rexglue:
         return
-    # The pin describes the xdzleo fork build of v0.10.0. That asset is no
-    # longer served, so the default SDK is now the upstream v0.10.0 release
-    # (gui/setup.py REXGLUE_UPSTREAM_URL) and the byte-exact pin is opt-in:
-    # REXAUTO_SDK_PIN=1 restores the refusal for people who still have the
-    # fork build and want the guarantee.
-    if os.environ.get("REXAUTO_SDK_PIN", "0") != "1":
+    # REXAUTO_SDK_PIN=0 disables the byte-exact check (hand-installed or
+    # upstream SDK). Default: enforced -- gui/setup.py downloads the exact build.
+    if os.environ.get("REXAUTO_SDK_PIN", "1") == "0":
         _sdk_pin_checked = True
         return
     _bin = os.path.dirname(rexglue)

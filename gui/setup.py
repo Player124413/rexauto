@@ -23,19 +23,19 @@ import zipfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-# The SDK download. Upstream ReXGlue v0.10.0 release asset (a plain install
-# tree: bin/ include/ lib/ ...). The xdzleo fork asset that earlier releases
-# pinned is no longer reachable, so the upstream build is the default; the
-# fork-specific sha256 pin is therefore only enforced when REXAUTO_SDK_PIN=1.
-REXGLUE_UPSTREAM_URL = ("https://github.com/rexglue/rexglue-sdk/releases/download/"
-                        "v0.10.0/rexglue-sdk-0.10.0-win-amd64.zip")
+# The SDK of this release: the xdzleo fork build of ReXGlue v0.10.0 with the
+# rexauto fixes (the one SDK_PIN in rexauto.py describes by hash). Pinned by
+# tag, never "latest": a newer asset would fail the pin and refuse to run.
+REXGLUE_UPSTREAM_URL = ("https://github.com/xdzleo/rexglue-sdk/releases/download/"
+                        "v0.10.0-rexauto.2/rexglue-sdk-win64.zip")
 REXGLUE_URL = os.environ.get("REXGLUE_BUNDLE_URL", REXGLUE_UPSTREAM_URL)
 
 
 def pin_enforced():
-    """The sha256 pin describes the xdzleo fork build. Against the upstream
-    release it always "mismatches", so it is opt-in (REXAUTO_SDK_PIN=1)."""
-    return os.environ.get("REXAUTO_SDK_PIN", "0") == "1"
+    """sha256 pin check on the installed SDK. On by default (the URL above is
+    the exact build); REXAUTO_SDK_PIN=0 turns it off for a hand-installed or
+    upstream SDK."""
+    return os.environ.get("REXAUTO_SDK_PIN", "1") != "0"
 
 
 def app_dir():

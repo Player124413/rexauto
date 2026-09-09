@@ -38,4 +38,11 @@
     <string name="pad_haptics">Vibrate on touch</string>
     <string name="pad_reset">Default</string>
     <string name="pad_hide">Hide</string>
+    <string name="gpu_driver">GPU driver (Turnip / Adreno)</string>
+    <string name="gpu_driver_system">System driver (default)</string>
+    <string name="gpu_driver_import">Import zip…</string>
+    <string name="gpu_driver_installed">Driver %1$s installed and selected</string>
+    <string name="gpu_driver_remove">Remove driver %1$s?</string>
+    <string name="gpu_driver_not_adreno">Replacement drivers only work on Qualcomm Adreno GPUs (Snapdragon). This device does not look like one – the choice below will probably be ignored and the system driver used.</string>
+    <string name="err_driver_zip">%1$s is not a driver pack: expected a zip with meta.json and a libvulkan_*.so (Turnip / Adreno driver zips from Yuzu, Skyline, Dolphin or Winlator work as-is).</string>
 </resources>

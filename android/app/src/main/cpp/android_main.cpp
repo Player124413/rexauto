@@ -21,6 +21,7 @@
 #include <dlfcn.h>
 #include <jni.h>
 
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -31,6 +32,9 @@
 #include <fmt/format.h>
 
 #include "android_gamepad.h"
+#if REX_HAVE_ADRENOTOOLS
+#include <adrenotools/driver.h>
+#endif
 #include <rex/cvar.h>
 #include <rex/filesystem.h>
 #include <rex/logging.h>
@@ -52,6 +56,11 @@ namespace {
 constexpr char kAppIdentifier[] = REX_APP_NAME;
 constexpr char kConfigFileName[] = "game_root.txt";
 constexpr char kSettingsFileName[] = "settings.txt";
+// <internal files>/gpu_driver/<name>/  + driver.txt naming the .so (written by
+// the launcher after importing a Turnip/Adreno driver zip). Internal storage,
+// not external: dlopen() refuses libraries on world-writable paths.
+constexpr char kDriverDirName[] = "gpu_driver";
+constexpr char kDriverConfigName[] = "driver.txt";
 
 #define ALOGE(...) __android_log_print(ANDROID_LOG_ERROR, REX_APP_NAME, __VA_ARGS__)
 #define ALOGI(...) __android_log_print(ANDROID_LOG_INFO, REX_APP_NAME, __VA_ARGS__)
@@ -113,6 +122,38 @@ std::string ResolveLogDir(const std::string& external_dir) {
   return dir;
 }
 
+// Load a user-supplied Vulkan driver (Turnip / newer Adreno blob) through
+// libadrenotools and publish the handle for the SDK's DynamicLibrary (see the
+// android-custom-vulkan SDK patch). Silent no-op when nothing is configured.
+void LoadCustomVulkanDriver(const std::string& internal_dir, const std::string& lib_dir) {
+#if REX_HAVE_ADRENOTOOLS
+  const std::string cfg = internal_dir + "/" + kDriverDirName + "/" + kDriverConfigName;
+  const std::string spec = ReadTrimmedFile(cfg);  // "<subdir>/<libvulkan_freedreno.so>"
+  if (spec.empty()) return;
+  const auto slash = spec.rfind('/');
+  const std::string dir = internal_dir + "/" + kDriverDirName + "/" +
+                          (slash == std::string::npos ? "" : spec.substr(0, slash)) + "/";
+  const std::string so = slash == std::string::npos ? spec : spec.substr(slash + 1);
+  std::error_code ec;
+  if (!std::filesystem::is_regular_file(dir + so, ec)) {
+    ALOGE("custom GPU driver configured but %s%s is missing - using the system driver", dir.c_str(), so.c_str());
+    return;
+  }
+  const std::string tmp = internal_dir + "/" + kDriverDirName + "/tmp";
+  std::filesystem::create_directories(tmp, ec);
+  void* handle = adrenotools_open_libvulkan(RTLD_NOW, ADRENOTOOLS_DRIVER_CUSTOM, tmp.c_str(),
+                                            lib_dir.c_str(), dir.c_str(), so.c_str(), nullptr, nullptr);
+  if (!handle) {
+    ALOGE("adrenotools_open_libvulkan(%s%s) failed - using the system driver", dir.c_str(), so.c_str());
+    return;
+  }
+  setenv("REX_VULKAN_HANDLE", std::to_string(reinterpret_cast<uintptr_t>(handle)).c_str(), 1);
+  ALOGI("custom Vulkan driver loaded: %s%s", dir.c_str(), so.c_str());
+#else
+  (void)internal_dir; (void)lib_dir;
+#endif
+}
+
 int RunAndroidApp() {
   const std::string lib_dir = QueryNativeLibraryDir();
   JavaVM* java_vm = QueryJavaVm();
@@ -130,6 +171,8 @@ int RunAndroidApp() {
   }
 
   const std::string game_root = ReadTrimmedFile(external_dir + "/" + kConfigFileName);
+  const char* internal_c = SDL_GetAndroidInternalStoragePath();
+  LoadCustomVulkanDriver(internal_c ? internal_c : "", lib_dir);
   std::error_code ec;
   std::filesystem::create_directories(external_dir + "/data", ec);
   const std::string log_dir = ResolveLogDir(external_dir);

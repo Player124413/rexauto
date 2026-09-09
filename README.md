@@ -149,6 +149,10 @@ artifact is a signed, installable APK:
 * **Graphics & performance** — resolution scale, vsync, letterbox, "tolerant mode" (skip
   calls to unregistered functions instead of crashing), and the mobile perf flag
   `--clear_memory_page_state=false`;
+* **GPU driver** — on Snapdragon phones, import a Turnip / newer Adreno driver zip (the
+  same packs Yuzu, Skyline, Dolphin and Winlator use: `meta.json` + `libvulkan_*.so`); it is
+  loaded through [libadrenotools](https://github.com/bylaws/libadrenotools) instead of
+  the system Vulkan driver. Long-press a driver to remove it;
 * an on-screen gamepad (movable / resizable, haptics) and Bluetooth controllers via SDL.
 
 Every APK of the same project is signed with the same CI key, so a new run installs over

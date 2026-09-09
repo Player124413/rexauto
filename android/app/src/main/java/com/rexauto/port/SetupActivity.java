@@ -48,10 +48,11 @@ import java.util.Locale;
 public class SetupActivity extends Activity {
     private static final int REQ_PICK_FILE = 1;
     private static final int REQ_PICK_TREE = 2;
+    private static final int REQ_PICK_DRIVER = 3;
 
     private TextView status;
     private ProgressBar progress;
-    private Button playBtn, pickBtn, pickDirBtn, gfxBtn, resetBtn;
+    private Button playBtn, pickBtn, pickDirBtn, gfxBtn, driverBtn, resetBtn;
     private final Handler ui = new Handler(Looper.getMainLooper());
     private volatile boolean busy;
 
@@ -117,6 +118,7 @@ public class SetupActivity extends Activity {
         pickBtn = button(root, R.string.pick_iso, v -> pickFile());
         pickDirBtn = button(root, R.string.pick_folder, v -> pickFolder());
         gfxBtn = button(root, R.string.graphics, v -> showGraphicsDialog());
+        driverBtn = button(root, R.string.gpu_driver, v -> showDriverDialog());
         resetBtn = button(root, R.string.reset, v -> reset());
 
         ScrollView sv = new ScrollView(this);
@@ -174,12 +176,14 @@ public class SetupActivity extends Activity {
         Uri uri = data.getData();
         if (req == REQ_PICK_FILE) importFile(uri);
         else if (req == REQ_PICK_TREE) importTree(uri);
+        else if (req == REQ_PICK_DRIVER) importDriver(uri);
     }
 
     private void setBusy(boolean b) {
         busy = b;
         pickBtn.setEnabled(!b);
         pickDirBtn.setEnabled(!b);
+        driverBtn.setEnabled(!b);
         resetBtn.setEnabled(!b);
         playBtn.setEnabled(!b);
         progress.setVisibility(b ? View.VISIBLE : View.GONE);
@@ -394,6 +398,75 @@ public class SetupActivity extends Activity {
     }
 
     // --- graphics settings --------------------------------------------------
+    // --- custom GPU driver (Turnip) ----------------------------------------
+    private void showDriverDialog() {
+        GpuDriver gd = new GpuDriver(this);
+        List<GpuDriver.Info> list = gd.installed();
+        String[] names = new String[list.size() + 1];
+        names[0] = getString(R.string.gpu_driver_system);
+        int checked = 0;
+        for (int i = 0; i < list.size(); i++) {
+            GpuDriver.Info d = list.get(i);
+            names[i + 1] = d.name + (d.version.isEmpty() ? "" : "  (" + d.version + ")");
+            if (d.slug.equals(gd.selected())) checked = i + 1;
+        }
+        final int[] pick = {checked};
+        AlertDialog.Builder b = new AlertDialog.Builder(this)
+                .setTitle(R.string.gpu_driver)
+                .setSingleChoiceItems(names, checked, (d, w) -> pick[0] = w)
+                .setPositiveButton(android.R.string.ok, (d, w) -> {
+                    try {
+                        gd.select(pick[0] == 0 ? null : list.get(pick[0] - 1).slug);
+                        Toast.makeText(this, pick[0] == 0 ? getString(R.string.gpu_driver_system) : list.get(pick[0] - 1).name, Toast.LENGTH_SHORT).show();
+                    } catch (Exception e) { Toast.makeText(this, e.toString(), Toast.LENGTH_LONG).show(); }
+                })
+                .setNeutralButton(R.string.gpu_driver_import, (d, w) -> {
+                    Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                    i.addCategory(Intent.CATEGORY_OPENABLE);
+                    i.setType("*/*");
+                    i.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"application/zip", "application/x-zip-compressed", "application/octet-stream"});
+                    startActivityForResult(i, REQ_PICK_DRIVER);
+                })
+                .setNegativeButton(android.R.string.cancel, null);
+        if (!GpuDriver.isAdreno()) {
+            b.setMessage(R.string.gpu_driver_not_adreno);
+        }
+        AlertDialog dlg = b.create();
+        dlg.getListView().setOnItemLongClickListener((p, v, pos, id) -> {
+            if (pos == 0) return true;
+            GpuDriver.Info d = list.get(pos - 1);
+            new AlertDialog.Builder(this).setMessage(getString(R.string.gpu_driver_remove, d.name))
+                    .setPositiveButton(android.R.string.ok, (dd, ww) -> {
+                        try { gd.remove(d.slug); } catch (Exception e) { Toast.makeText(this, e.toString(), Toast.LENGTH_LONG).show(); }
+                        dlg.dismiss();
+                        showDriverDialog();
+                    }).setNegativeButton(android.R.string.cancel, null).show();
+            return true;
+        });
+        dlg.show();
+    }
+
+    private void importDriver(Uri uri) {
+        setBusy(true);
+        String name = displayName(uri);
+        post(getString(R.string.status_reading, name));
+        new Thread(() -> {
+            try {
+                GpuDriver gd = new GpuDriver(this);
+                GpuDriver.Info info = gd.importZip(getContentResolver(), uri, name);
+                gd.select(info.slug);
+                ui.post(() -> {
+                    setBusy(false);
+                    refresh();
+                    Toast.makeText(this, getString(R.string.gpu_driver_installed, info.name), Toast.LENGTH_LONG).show();
+                    showDriverDialog();
+                });
+            } catch (Exception e) {
+                fail(e.getMessage());
+            }
+        }, "import-driver").start();
+    }
+
     private void showGraphicsDialog() {
         GraphicsSettings gs = new GraphicsSettings(this);
         float dp = getResources().getDisplayMetrics().density;

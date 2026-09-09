@@ -272,6 +272,7 @@ jobs:
           grep -q "lib/arm64-v8a/libmain.so" /tmp/apk.txt || { echo "::error::libmain.so missing"; exit 1; }
           grep -Eq "lib/arm64-v8a/librexgpu-xenos.*\.so" /tmp/apk.txt || { echo "::error::GPU plugin missing"; exit 1; }
           grep -q "assets/xbox360_titles.json" /tmp/apk.txt || { echo "::error::title DB missing"; exit 1; }
+          grep -q "lib/arm64-v8a/libadrenotools.so" /tmp/apk.txt && grep -q "lib/arm64-v8a/libmain_hook.so" /tmp/apk.txt || echo "::warning::libadrenotools not packaged - custom GPU drivers will be unavailable"
           cp "$APK" "${{ runner.temp }}/${{ inputs.name }}-android.apk"
           SIZE=$(stat -c%s "$APK")
           {
@@ -280,7 +281,7 @@ jobs:
             echo "- Title ID: \`${{ needs.recompile.outputs.title_id }}\`"
             echo "- APK: \`${{ inputs.name }}-android.apk\` ($((SIZE / 1048576)) MB, arm64-v8a, Vulkan)"
             echo ""
-            echo "Install the APK, open it, tap **Choose ISO / default.xex**, pick your disc image — it unpacks itself. Then **Graphics & performance**, then **Play**."
+            echo "Install the APK, open it, tap **Choose ISO / XBLA package / default.xex** (or **Choose folder** for GoD), pick your dump — it unpacks itself. Then **Graphics & performance**, optionally **GPU driver** (import a Turnip zip on Snapdragon), then **Play**."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4

@@ -31,6 +31,19 @@ endif()
 
 add_subdirectory("${REXSDK_DIR}" rexglue-sdk)
 
+# --- libadrenotools: custom Turnip/Adreno Vulkan driver loader ---------------
+# Ships as libadrenotools.so + its hook libs (libmain_hook.so, libhook_impl.so,
+# libfile_redirect_hook.so, libgsl_alloc_hook.so); android_main.cpp dlopen()s
+# the driver through it when the launcher has one configured.
+set(ADRENOTOOLS_DIR "${REXSDK_DIR}/../libadrenotools" CACHE PATH "libadrenotools checkout")
+if(EXISTS "${ADRENOTOOLS_DIR}/CMakeLists.txt")
+    set(BUILD_SHARED_LIBS ON)
+    add_subdirectory("${ADRENOTOOLS_DIR}" adrenotools)
+    set(REX_HAVE_ADRENOTOOLS ON)
+else()
+    message(WARNING "libadrenotools not found at ${ADRENOTOOLS_DIR} - custom GPU drivers disabled")
+endif()
+
 # --- recompiled guest code (from the desktop rexauto pipeline) ---------------
 set(REX_GEN_DIR "${REX_PORT_DIR}/generated/default")
 include("${REX_GEN_DIR}/sources.cmake")
@@ -66,6 +79,11 @@ target_compile_definitions(main PRIVATE
     REXGLUE_BUILD_CONFIG="$<CONFIG>"
     REX_APP_NAME="${REX_APP_NAME}")
 target_link_libraries(main PRIVATE recomp rex::runtime rexui)
+if(REX_HAVE_ADRENOTOOLS)
+    target_compile_definitions(main PRIVATE REX_HAVE_ADRENOTOOLS=1)
+    target_link_libraries(main PRIVATE adrenotools)
+    add_dependencies(main main_hook file_redirect_hook gsl_alloc_hook hook_impl)
+endif()
 target_link_options(main PRIVATE -Wl,--export-dynamic)
 add_dependencies(main rexgpu-xenos)
 set_target_properties(main PROPERTIES CXX_VISIBILITY_PRESET default VISIBILITY_INLINES_HIDDEN OFF)

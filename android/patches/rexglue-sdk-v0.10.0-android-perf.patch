@@ -1,0 +1,411 @@
+diff --git a/include/rex/logging/types.h b/include/rex/logging/types.h
+index 984e28a..4af4714 100644
+--- a/include/rex/logging/types.h
++++ b/include/rex/logging/types.h
+@@ -79,8 +79,16 @@ struct LogConfig {
+   /** spdlog pattern string for the file sink. */
+   std::string file_pattern = "[%Y-%m-%d %H:%M:%S.%e] [%l] [%n] [t%t] %v";
+ 
+-  /** Messages at or above this level trigger an immediate flush. */
+-  spdlog::level::level_enum flush_level = spdlog::level::info;
++  /**
++   * Messages at or above this level trigger an immediate flush.
++   *
++   * Defaults to warn (not info): flushing on every info message performs a
++   * synchronous write per log line, which is especially expensive on Android
++   * where the log file lives on FUSE-backed shared storage and loggers run on
++   * the main game thread. Warnings and errors are still flushed immediately;
++   * info lines are written by the periodic flush / on close.
++   */
++  spdlog::level::level_enum flush_level = spdlog::level::warn;
+ 
+   /**
+    * Per-category log level overrides.
+diff --git a/include/rex/system/function_dispatcher.h b/include/rex/system/function_dispatcher.h
+index 916f3d6..19adf76 100644
+--- a/include/rex/system/function_dispatcher.h
++++ b/include/rex/system/function_dispatcher.h
+@@ -154,6 +154,11 @@ class FunctionDispatcher : public IModuleRegistrar {
+ 
+   // Protects dispatcher metadata during module registration and callback dispatch.
+   mutable std::recursive_mutex dispatch_mutex_;
++
++  // Serializes interrupt dispatches among themselves (vblank thread, GPU
++  // thread PM4_INTERRUPT, timer DPCs) without holding the global critical
++  // region while guest callback code runs. See ExecuteInterrupt.
++  std::mutex interrupt_dispatch_mutex_;
+ };
+ 
+ }  // namespace rex::runtime
+diff --git a/src/core/memory_posix.cpp b/src/core/memory_posix.cpp
+index baf7b8c..ac56b0f 100644
+--- a/src/core/memory_posix.cpp
++++ b/src/core/memory_posix.cpp
+@@ -9,13 +9,16 @@
+  * @modified    Tom Clay & Rien Gupta, 2026 - Adapted for ReXGlue runtime (POSIX + macOS)
+  */
+ 
++#include <algorithm>
+ #include <cerrno>
+ #include <cstddef>
+ #include <cstdio>
+ #include <cstring>
+ #include <fstream>
+ #include <functional>
++#include <mutex>
+ #include <string>
++#include <vector>
+ 
+ #include <fcntl.h>
+ 
+@@ -204,6 +207,59 @@ static bool FindEntryForAddress(void* address, LinuxMapEntry& out_entry) {
+   return false;
+ }
+ 
++// Cached /proc/self/maps snapshot for the exception fast path.
++//
++// The write-watch fault handler queries the current protection of guest arena
++// pages on every fault (mmio_handler.cpp). Parsing /proc/self/maps regenerates
++// the seq_file text of every VMA in the process (hundreds of VMAs under a
++// Vulkan driver), which costs 50 us to >1 ms per fault - all while holding the
++// global critical region, and dozens of thousands of times per session on a
++// phone.
++//
++// Every protection change to guest arena pages flows through the mutating
++// functions below (AllocFixed / DeallocFixed / Protect), which invalidate the
++// snapshot, so the cache is always fresh for the addresses the fault path
++// queries. External (non-arena) mappings mutated by other components are never
++// the subject of fault-path queries, and a fault itself proves the page is not
++// writable, so a stale entry cannot skip a legitimate write-watch fixup.
++struct LinuxMapsCache {
++  std::mutex mutex;
++  std::vector<LinuxMapEntry> entries;
++  bool valid = false;
++};
++
++static LinuxMapsCache g_linux_maps_cache;
++
++static bool FindEntryForAddressCached(void* address, LinuxMapEntry& out_entry) {
++  const uintptr_t addr = reinterpret_cast<uintptr_t>(address);
++  std::lock_guard<std::mutex> lock(g_linux_maps_cache.mutex);
++  if (!g_linux_maps_cache.valid) {
++    g_linux_maps_cache.entries.clear();
++    std::ifstream maps("/proc/self/maps");
++    if (!maps.is_open()) {
++      return false;
++    }
++    std::string line;
++    while (std::getline(maps, line)) {
++      LinuxMapEntry e;
++      if (ParseProcMapsLine(line, e)) {
++        g_linux_maps_cache.entries.push_back(e);
++      }
++    }
++    std::sort(g_linux_maps_cache.entries.begin(), g_linux_maps_cache.entries.end(),
++              [](const LinuxMapEntry& a, const LinuxMapEntry& b) { return a.start < b.start; });
++    g_linux_maps_cache.valid = true;
++  }
++  const auto it = std::lower_bound(
++      g_linux_maps_cache.entries.begin(), g_linux_maps_cache.entries.end(), addr,
++      [](const LinuxMapEntry& e, uintptr_t value) { return e.end <= value; });
++  if (it == g_linux_maps_cache.entries.end() || addr < it->start) {
++    return false;
++  }
++  out_entry = *it;
++  return true;
++}
++
+ // Check if [base, base+length) is fully covered by existing mappings (no gaps)
+ static bool IsRangeFullyMapped(void* base_address, size_t length) {
+   if (!base_address || length == 0)
+@@ -252,6 +308,16 @@ static PageAccess PermsToPageAccess(const char perms[5]) {
+ }  // namespace
+ #endif  // REX_PLATFORM_LINUX
+ 
++// Drop the cached /proc/self/maps snapshot (no-op on non-Linux platforms).
++// Called by every function in this file that mutates page mappings, so the
++// fault-path QueryProtect always observes the current protection state.
++static void InvalidateLinuxMapsCache() {
++#if REX_PLATFORM_LINUX
++  std::lock_guard<std::mutex> lock(g_linux_maps_cache.mutex);
++  g_linux_maps_cache.valid = false;
++#endif  // REX_PLATFORM_LINUX
++}
++
+ void* AllocFixed(void* base_address, size_t length, AllocationType allocation_type,
+                  PageAccess access) {
+   // Emulates Windows VirtualAlloc behavior:
+@@ -260,6 +326,10 @@ void* AllocFixed(void* base_address, size_t length, AllocationType allocation_ty
+   // - New allocation: mmap with MAP_FIXED_NOREPLACE (never silently replace)
+   const uint32_t prot_requested = ToPosixProtectFlags(access);
+ 
++  // This function mutates page mappings; drop the cached /proc/self/maps
++  // snapshot used by the fault-path QueryProtect before (and after) mutating.
++  InvalidateLinuxMapsCache();
++
+   // Determine initial protection based on allocation type
+   int prot_initial = 0;
+   switch (allocation_type) {
+@@ -311,6 +381,7 @@ void* AllocFixed(void* base_address, size_t length, AllocationType allocation_ty
+ 
+   void* result = mmap(base_address, length, prot_initial, flags, -1, 0);
+   if (result != MAP_FAILED) {
++    InvalidateLinuxMapsCache();
+     return result;
+   }
+ #if defined(MAP_FIXED_NOREPLACE) && REX_PLATFORM_LINUX
+@@ -322,6 +393,7 @@ void* AllocFixed(void* base_address, size_t length, AllocationType allocation_ty
+     // Verify the entire range is mapped before using mprotect
+     if (IsRangeFullyMapped(base_address, length)) {
+       if (mprotect(base_address, length, static_cast<int>(prot_requested)) == 0) {
++        InvalidateLinuxMapsCache();
+         return base_address;
+       }
+     }
+@@ -341,10 +413,15 @@ bool DeallocFixed(void* base_address, size_t length, DeallocationType deallocati
+ #if defined(MADV_DONTNEED)
+       (void)madvise(base_address, length, MADV_DONTNEED);
+ #endif
++      InvalidateLinuxMapsCache();
+       return true;
+     }
+     case DeallocationType::kRelease: {
+-      return munmap(base_address, length) == 0;
++      const bool released = munmap(base_address, length) == 0;
++      if (released) {
++        InvalidateLinuxMapsCache();
++      }
++      return released;
+     }
+     default:
+       // how we get here? :(
+@@ -385,6 +462,9 @@ bool Protect(void* base_address, size_t length, PageAccess access, PageAccess* o
+     REXSYS_ERROR("mprotect({}, 0x{:X}, {}) failed: {} ({})", base_address, length, prot,
+                  strerror(errno), errno);
+   }
++  if (ret == 0) {
++    InvalidateLinuxMapsCache();
++  }
+   return ret == 0;
+ }
+ 
+@@ -432,7 +512,7 @@ bool QueryProtect(void* base_address, size_t& length, PageAccess& access_out) {
+   length = 0;
+ 
+   LinuxMapEntry e;
+-  if (!FindEntryForAddress(base_address, e)) {
++  if (!FindEntryForAddressCached(base_address, e)) {
+     return false;
+   }
+ 
+diff --git a/src/graphics/command_processor.cpp b/src/graphics/command_processor.cpp
+index a744375..18962bc 100644
+--- a/src/graphics/command_processor.cpp
++++ b/src/graphics/command_processor.cpp
+@@ -214,13 +214,16 @@ void CommandProcessor::WorkerThreadMain() {
+     if (write_ptr_index == 0xBAADF00D || read_ptr_index_ == write_ptr_index) {
+       SCOPE_profile_cpu_i("gpu", "rex::graphics::CommandProcessor::Stall");
+       // We've run out of commands to execute.
+-      // We spin here waiting for new ones, as the overhead of waiting on our
+-      // event is too high.
++      // We spin briefly here waiting for new ones, as the overhead of waiting
++      // on our event is not free either - but on mobile SoCs (2-4 big cores
++      // shared with the whole guest) a long sched_yield spin steals a big
++      // core from the game thread while the ring stays empty, so fall back to
++      // event waits quickly.
+       PrepareForWait();
+       uint32_t loop_count = 0;
+       do {
+         // If we spin around too much, revert to a "low-power" state.
+-        if (loop_count > 500) {
++        if (loop_count > 64) {
+           const int wait_time_ms = 5;
+           rex::thread::Wait(write_ptr_index_event_.get(), true,
+                             std::chrono::milliseconds(wait_time_ms));
+diff --git a/src/graphics/vulkan/command_processor.cpp b/src/graphics/vulkan/command_processor.cpp
+index 001f36b..0b45c0d 100644
+--- a/src/graphics/vulkan/command_processor.cpp
++++ b/src/graphics/vulkan/command_processor.cpp
+@@ -11,6 +11,7 @@
+ 
+ #include <algorithm>
+ #include <array>
++#include <atomic>
+ #include <cstdint>
+ #include <cstring>
+ #include <iterator>
+@@ -4044,6 +4045,23 @@ bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType prim_type, uint32_t
+         std::max(memexport_extent_end, memexport_range_base_bytes + memexport_range.size_bytes);
+   }
+   if (memexport_writes_possible && memexport_ranges_.empty()) {
++    // Diagnostic: this conservative path makes the full 512 MB shared memory
++    // resident, inserts a whole-buffer barrier for the draw and, after the
++    // draw, invalidates every watched texture and re-protects every page.
++    // A title hitting this every draw collapses to ~1 FPS on mobile-class
++    // memory bandwidth. It is silent in upstream logs, so emit a throttled
++    // warning to make its incidence measurable.
++    static std::atomic<uint32_t> unresolved_memexport_draw_count{0};
++    const uint32_t unresolved_draw_index =
++        unresolved_memexport_draw_count.fetch_add(1, std::memory_order_relaxed);
++    if ((unresolved_draw_index % 60) == 0) {
++      REXGPU_WARN(
++          "Draw #{} with memexport-capable shader but unresolved export "
++          "destinations: using the full {} MiB shared memory range (resident "
++          "request, whole-buffer barrier, global texture invalidation). If "
++          "frame rate is low, this path is a likely cause.",
++          unresolved_draw_index, uint32_t(SharedMemory::kBufferSize >> 20));
++    }
+     if (!shared_memory_->RequestRange(0, SharedMemory::kBufferSize)) {
+       REXGPU_ERROR(
+           "Failed to request full shared memory residency for unresolved "
+diff --git a/src/graphics/vulkan/texture_cache.cpp b/src/graphics/vulkan/texture_cache.cpp
+index ecbd940..51ddbb4 100644
+--- a/src/graphics/vulkan/texture_cache.cpp
++++ b/src/graphics/vulkan/texture_cache.cpp
+@@ -2462,11 +2462,28 @@ bool VulkanTextureCache::Initialize() {
+   // decompressed.
+   // TODO(Triang3l): S3TC -> 5551 or 4444 as an option.
+   // TODO(Triang3l): S3TC -> ETC2 / EAC (a huge research topic).
++  // One-shot diagnostic for BC fallbacks: decompressing BC textures to RGBA8
++  // multiplies texture memory and re-upload bandwidth 4x (and adds a compute
++  // decode pass on every invalidation). On mobile this alone can dominate
++  // frame time, so log exactly which format feature bits the driver is
++  // missing to make the fallback reason visible in device logs.
++  auto log_bc_fallback = [](const char* guest_format_name, VkFormat bc_format,
++                            VkFormatFeatureFlags optimal_tiling_features) {
++    const VkFormatFeatureFlags missing =
++        kLinearFilterFeatures & ~optimal_tiling_features;
++    REXGPU_WARN(
++        "Texture format {} falling back from {} to an uncompressed format "
++        "(missing format feature bits: {:x}h) - this multiplies texture "
++        "memory and upload bandwidth 4x",
++        guest_format_name, uint32_t(bc_format), uint32_t(missing));
++  };
+   HostFormatPair& host_format_dxt1 = host_formats_[uint32_t(xenos::TextureFormat::k_DXT1)];
+   assert_true(host_format_dxt1.format_unsigned.format == VK_FORMAT_BC1_RGBA_UNORM_BLOCK);
+   ifn.vkGetPhysicalDeviceFormatProperties(physical_device, VK_FORMAT_BC1_RGBA_UNORM_BLOCK,
+                                           &format_properties);
+   if ((format_properties.optimalTilingFeatures & kLinearFilterFeatures) != kLinearFilterFeatures) {
++    log_bc_fallback("k_DXT1", VK_FORMAT_BC1_RGBA_UNORM_BLOCK,
++                    format_properties.optimalTilingFeatures);
+     host_format_dxt1.format_unsigned.load_shader = kLoadShaderIndexDXT1ToRGBA8;
+     host_format_dxt1.format_unsigned.format = VK_FORMAT_R8G8B8A8_UNORM;
+     host_format_dxt1.format_unsigned.block_compressed = false;
+@@ -2477,6 +2494,8 @@ bool VulkanTextureCache::Initialize() {
+   ifn.vkGetPhysicalDeviceFormatProperties(physical_device, VK_FORMAT_BC2_UNORM_BLOCK,
+                                           &format_properties);
+   if ((format_properties.optimalTilingFeatures & kLinearFilterFeatures) != kLinearFilterFeatures) {
++    log_bc_fallback("k_DXT2_3", VK_FORMAT_BC2_UNORM_BLOCK,
++                    format_properties.optimalTilingFeatures);
+     host_format_dxt2_3.format_unsigned.load_shader = kLoadShaderIndexDXT3ToRGBA8;
+     host_format_dxt2_3.format_unsigned.format = VK_FORMAT_R8G8B8A8_UNORM;
+     host_format_dxt2_3.format_unsigned.block_compressed = false;
+@@ -2487,6 +2506,8 @@ bool VulkanTextureCache::Initialize() {
+   ifn.vkGetPhysicalDeviceFormatProperties(physical_device, VK_FORMAT_BC3_UNORM_BLOCK,
+                                           &format_properties);
+   if ((format_properties.optimalTilingFeatures & kLinearFilterFeatures) != kLinearFilterFeatures) {
++    log_bc_fallback("k_DXT4_5", VK_FORMAT_BC3_UNORM_BLOCK,
++                    format_properties.optimalTilingFeatures);
+     host_format_dxt4_5.format_unsigned.load_shader = kLoadShaderIndexDXT5ToRGBA8;
+     host_format_dxt4_5.format_unsigned.format = VK_FORMAT_R8G8B8A8_UNORM;
+     host_format_dxt4_5.format_unsigned.block_compressed = false;
+@@ -2497,6 +2518,8 @@ bool VulkanTextureCache::Initialize() {
+   ifn.vkGetPhysicalDeviceFormatProperties(physical_device, VK_FORMAT_BC5_UNORM_BLOCK,
+                                           &format_properties);
+   if ((format_properties.optimalTilingFeatures & kLinearFilterFeatures) != kLinearFilterFeatures) {
++    log_bc_fallback("k_DXN", VK_FORMAT_BC5_UNORM_BLOCK,
++                    format_properties.optimalTilingFeatures);
+     host_format_dxn.format_unsigned.load_shader = kLoadShaderIndexDXNToRG8;
+     host_format_dxn.format_unsigned.format = VK_FORMAT_R8G8_UNORM;
+     host_format_dxn.format_unsigned.block_compressed = false;
+@@ -2506,6 +2529,8 @@ bool VulkanTextureCache::Initialize() {
+   ifn.vkGetPhysicalDeviceFormatProperties(physical_device, VK_FORMAT_BC4_UNORM_BLOCK,
+                                           &format_properties);
+   if ((format_properties.optimalTilingFeatures & kLinearFilterFeatures) != kLinearFilterFeatures) {
++    log_bc_fallback("k_DXT5A", VK_FORMAT_BC4_UNORM_BLOCK,
++                    format_properties.optimalTilingFeatures);
+     host_format_dxt5a.format_unsigned.load_shader = kLoadShaderIndexDXT5AToR8;
+     host_format_dxt5a.format_unsigned.format = VK_FORMAT_R8_UNORM;
+     host_format_dxt5a.format_unsigned.block_compressed = false;
+diff --git a/src/system/function_dispatcher.cpp b/src/system/function_dispatcher.cpp
+index d3f9791..eb06a16 100644
+--- a/src/system/function_dispatcher.cpp
++++ b/src/system/function_dispatcher.cpp
+@@ -147,8 +147,19 @@ uint64_t FunctionDispatcher::ExecuteInterrupt(ThreadState* thread_state, uint32_
+   SCOPE_profile_cpu_f("cpu");
+   PROFILE_INTERRUPT_DISPATCHED();
+ 
+-  // Hold the global lock during interrupt dispatch.
+-  auto global_lock = global_critical_region_.Acquire();
++  // Serialize interrupt dispatches against each other, but do NOT hold the
++  // global critical region while the guest callback runs.
++  //
++  // The interrupt callback executes arbitrary recompiled guest code (the
++  // game's vblank handler runs at 60 Hz, PM4_INTERRUPT runs on the GPU
++  // thread). Holding the global lock for its whole duration forced every
++  // concurrent write-watch fault resolution, kernel-object refcount and
++  // audio submission to stall until the callback finished - measured on the
++  // Android Dante's Inferno port as the main serialization stall behind the
++  // ~1 FPS frame rate. Interrupt callbacks run on their own thread state and
++  // everything they touch (kernel objects, page watches, memory protection)
++  // acquires the global lock itself, so guest execution does not need it.
++  std::lock_guard<std::mutex> interrupt_lock(interrupt_dispatch_mutex_);
+ 
+   auto* ctx = thread_state->context();
+   assert_true(arg_count <= 5);
+diff --git a/src/system/mmio_handler.cpp b/src/system/mmio_handler.cpp
+index 7f682f5..e6a89be 100644
+--- a/src/system/mmio_handler.cpp
++++ b/src/system/mmio_handler.cpp
+@@ -10,7 +10,9 @@
+  */
+ 
+ #include <algorithm>
++#include <cstdint>
+ #include <cstring>
++#include <unordered_map>
+ #include <utility>
+ 
+ #if REX_PLATFORM_WIN32
+@@ -526,8 +528,32 @@ bool MMIOHandler::ExceptionCallback(arch::Exception* ex) {
+         REXLOG_ERROR("Null-pointer {} at guest 0x{:08X}",
+                     is_write ? "write" : "read", fault_guest_virtual_address);
+       }
+-      REXLOG_ERROR("Access violation faulting PC: 0x{:016X}", (uint64_t)rip);
++      // Throttled fault diagnostics: logging synchronously on EVERY fault
++      // (logcat socket + file sink, flushed per message on FUSE-backed
++      // storage) stalls the faulting thread for 0.1-1 ms each time under the
++      // global critical region. A single Dante's Inferno session on Android
++      // produced 37,836 identical lines this way. Log the first fault per
++      // host PC in full, then only aggregate counts (still under the global
++      // lock, so no extra synchronization is needed).
++      static uint32_t fault_count_total = 0;
++      static std::unordered_map<uintptr_t, uint32_t> fault_count_per_pc;
++      ++fault_count_total;
++      const auto emplace_result =
++          fault_count_per_pc.try_emplace(static_cast<uintptr_t>(rip), 1);
++      const bool first_fault_at_pc = emplace_result.second;
++      if (!first_fault_at_pc) {
++        ++emplace_result.first->second;
++      }
++      if (first_fault_at_pc) {
++        REXLOG_ERROR("Access violation faulting PC: 0x{:016X} (first occurrence)",
++                     (uint64_t)rip);
++      } else if ((fault_count_total % 1000) == 0) {
++        REXLOG_ERROR(
++            "Access violations so far: {} total, {} distinct faulting PCs",
++            fault_count_total, fault_count_per_pc.size());
++      }
+ #if REX_PLATFORM_WIN32
++      if (first_fault_at_pc) {
+       // Resolve module base for the faulting PC so we can compute RVA
+       HMODULE hMod = nullptr;
+       if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+@@ -548,6 +574,7 @@ bool MMIOHandler::ExceptionCallback(arch::Exception* ex) {
+           REXLOG_ERROR("  host frame [{}]: 0x{:016X}", i, (uint64_t)(uintptr_t)frames[i]);
+         }
+       }
++      }
+ #endif
+       return access_violation_callback_(std::move(lock), access_violation_callback_context_,
+                                         fault_host_address, is_write);

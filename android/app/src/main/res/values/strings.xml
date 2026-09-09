@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- app_name is overridden per build from Gradle (resValue) -->
+    <string name="edition">Android Edition · Title ID %1$s</string>
+    <string name="setup_help">This app is a native recompilation of <b>%1$s</b> (Xbox 360, Title ID %2$s). It contains no game data.\n\nDrop in YOUR copy: tap \"Choose ISO / default.xex\" and pick the game\'s disc image (.iso) or its default.xex, or pick an already-extracted folder. The files are unpacked into this app\'s own storage – no special permissions needed. Any other game is refused.</string>
+    <string name="status_idle">Waiting for the game files…</string>
+    <string name="status_ready">Ready. Game files: %1$s</string>
+    <string name="status_reading">Reading %1$s…</string>
+    <string name="status_copying">Copying folder…</string>
+    <string name="status_copied">Copied %1$d file(s)… %2$s</string>
+    <string name="status_done">Game installed</string>
+    <string name="play">▶  Play</string>
+    <string name="pick_iso">Choose ISO / default.xex</string>
+    <string name="pick_folder">Choose extracted folder</string>
+    <string name="graphics">Graphics &amp; performance</string>
+    <string name="reset">Remove game files</string>
+    <string name="reset_confirm">Delete the extracted game files from this app\'s storage?</string>
+    <string name="err_no_xex_in_iso">The disc image has no default.xex – not an Xbox 360 game disc.</string>
+    <string name="err_no_xex_in_folder">No default.xex found in that folder.</string>
+    <string name="err_not_iso">%1$s is neither an Xbox 360 ISO nor a default.xex.</string>
+    <string name="err_wrong_game">That is <b>%1$s</b>. This app is built for <b>%2$s</b> (Title ID %3$s) – please pick that game\'s disc image.</string>
+    <string name="err_generic">Import failed.</string>
+
+    <string name="gfx_scale">Internal resolution</string>
+    <string name="gfx_effect">Output filter</string>
+    <string name="gfx_video_mode">Game video mode</string>
+    <string name="gfx_vsync">V-Sync (smoother, caps FPS)</string>
+    <string name="gfx_letterbox">Keep aspect ratio (letterbox)</string>
+    <string name="gfx_tolerant">Tolerant mode (skip missing functions instead of crashing)</string>
+    <string name="gfx_extra">Advanced: extra runtime options (key=value per line)</string>
+
+    <!-- Virtual gamepad (from hells-gate-recomp-android) -->
+    <string name="pad_settings_title">On-screen controls</string>
+    <string name="pad_size">Size: %1$d%%</string>
+    <string name="pad_opacity">Opacity: %1$d%%</string>
+    <string name="pad_haptics">Vibrate on touch</string>
+    <string name="pad_reset">Default</string>
+    <string name="pad_hide">Hide</string>
+</resources>

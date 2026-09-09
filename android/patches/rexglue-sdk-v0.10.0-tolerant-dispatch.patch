@@ -1,0 +1,43 @@
+diff --git a/src/system/function_dispatcher.cpp b/src/system/function_dispatcher.cpp
+index bd43109..6c2d9fe 100644
+--- a/src/system/function_dispatcher.cpp
++++ b/src/system/function_dispatcher.cpp
+@@ -23,6 +23,10 @@
+ #include <rex/system/function_dispatcher.h>
+ #include <rex/system/thread_state.h>
+ 
++#include <cstdlib>
++#include <mutex>
++#include <unordered_set>
++
+ namespace rex::runtime {
+ 
+ namespace {
+@@ -35,8 +39,25 @@ FunctionDispatcher* GetBoundFunctionDispatcher() {
+ }  // namespace
+ 
+ static void InvalidFunctionTrap(PPCContext& ctx, uint8_t* /*base*/) {
+-  REX_FATAL("Call to invalid or unregistered function at guest address 0x{:08X}",
+-            ctx.last_indirect_target);
++  uint32_t target = ctx.last_indirect_target;
++  // REX_HEAL_DISCOVER ("tolerant mode" in the Android launcher): log the
++  // target once and RETURN instead of aborting. A target of 0 is usually the
++  // title calling through a pointer it never filled in; skipping the call is
++  // what real hardware effectively did. Opt-in because state may be
++  // inconsistent afterwards.
++  static const bool discover = std::getenv("REX_HEAL_DISCOVER") != nullptr;
++  if (discover) {
++    static std::mutex mtx;
++    static std::unordered_set<uint32_t> seen;
++    std::lock_guard<std::mutex> lk(mtx);
++    if (seen.insert(target).second) {
++      REXLOG_WARN("Call to invalid or unregistered function at guest address 0x{:08X}", target);
++    }
++    return;
++  }
++  REX_FATAL("Call to invalid or unregistered function at guest address 0x{:08X} "
++            "(called from lr=0x{:08X})",
++            target, static_cast<uint32_t>(ctx.lr));
+ }
+ 
+ PPCFunc* ResolveIndirectFunction(uint32_t guest_address) {

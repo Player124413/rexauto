@@ -1,0 +1,208 @@
+/**
+ * rexauto Android port - native entry point (generic, title-agnostic).
+ *
+ * Derived from deivid22srk/hells-gate-recomp-android (android_main.cpp) and
+ * generalised: the project identifier arrives from CMake (REX_APP_NAME), the
+ * game data root and the graphics settings are written by the Java launcher
+ * (SetupActivity) into the app's external files dir:
+ *
+ *   <external>/game_root.txt   absolute path of the folder holding default.xex
+ *   <external>/settings.txt    one "key=value" per line -> passed as --key=value
+ *                              cvars (resolution_scale, vsync, present_effect...)
+ *
+ * SDL3's SDL_main.h maps main() to SDL_main; org.libsdl.app.SDLActivity calls
+ * SDL_RunApp on a dedicated thread which lands here.
+ */
+
+#include <SDL3/SDL_main.h>
+#include <SDL3/SDL_system.h>
+
+#include <android/log.h>
+#include <dlfcn.h>
+#include <jni.h>
+
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include <fmt/format.h>
+
+#include "android_gamepad.h"
+#include <rex/cvar.h>
+#include <rex/filesystem.h>
+#include <rex/logging.h>
+#include <rex/main_android.h>
+#include <rex/memory.h>
+#include <rex/platform.h>
+#include <rex/thread.h>
+#include <rex/ui/windowed_app.h>
+#include <rex/ui/windowed_app_context_sdl.h>
+
+#if REX_PLATFORM_ANDROID
+
+#ifndef REX_APP_NAME
+#error "REX_APP_NAME must be defined by the build (the rexglue project name)"
+#endif
+
+namespace {
+
+constexpr char kAppIdentifier[] = REX_APP_NAME;
+constexpr char kConfigFileName[] = "game_root.txt";
+constexpr char kSettingsFileName[] = "settings.txt";
+
+#define ALOGE(...) __android_log_print(ANDROID_LOG_ERROR, REX_APP_NAME, __VA_ARGS__)
+#define ALOGI(...) __android_log_print(ANDROID_LOG_INFO, REX_APP_NAME, __VA_ARGS__)
+
+std::string ReadTrimmedFile(const std::string& path) {
+  std::ifstream in(path, std::ios::binary);
+  if (!in) return {};
+  std::string line;
+  std::getline(in, line);
+  while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+  return line;
+}
+
+// settings.txt -> ["--key=value", ...]. Blank lines and '#' comments ignored.
+std::vector<std::string> ReadSettingsArgs(const std::string& path) {
+  std::vector<std::string> out;
+  std::ifstream in(path, std::ios::binary);
+  if (!in) return out;
+  std::string line;
+  while (std::getline(in, line)) {
+    while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+    if (line.empty() || line[0] == '#') continue;
+    const auto eq = line.find('=');
+    if (eq == std::string::npos || eq == 0) continue;
+    if (line.rfind("env.", 0) == 0) {
+      // env.NAME=value -> setenv(NAME, value); consumed by getenv() readers
+      // such as the tolerant dispatcher (REX_HEAL_DISCOVER).
+      setenv(line.substr(4, eq - 4).c_str(), line.substr(eq + 1).c_str(), 1);
+      continue;
+    }
+    out.emplace_back("--" + line);
+  }
+  return out;
+}
+
+std::string QueryNativeLibraryDir() {
+  Dl_info info{};
+  if (dladdr(reinterpret_cast<void*>(&QueryNativeLibraryDir), &info) && info.dli_fname) {
+    std::string path(info.dli_fname);
+    const size_t slash = path.find_last_of('/');
+    if (slash != std::string::npos) return path.substr(0, slash);
+  }
+  return {};
+}
+
+JavaVM* QueryJavaVm() {
+  auto* env = static_cast<JNIEnv*>(SDL_GetAndroidJNIEnv());
+  if (env) {
+    JavaVM* vm = nullptr;
+    if (env->GetJavaVM(&vm) == JNI_OK && vm) return vm;
+  }
+  return nullptr;
+}
+
+std::string ResolveLogDir(const std::string& external_dir) {
+  const std::string dir = external_dir + "/logs";
+  std::error_code ec;
+  std::filesystem::create_directories(dir, ec);
+  return dir;
+}
+
+int RunAndroidApp() {
+  const std::string lib_dir = QueryNativeLibraryDir();
+  JavaVM* java_vm = QueryJavaVm();
+  if (lib_dir.empty()) ALOGE("nativeLibraryDir unresolved - GPU plugin loading will fail");
+
+  if (!SDL_InitSubSystem(SDL_INIT_VIDEO)) {
+    ALOGE("SDL_InitSubSystem(SDL_INIT_VIDEO) failed: %s", SDL_GetError());
+    return EXIT_FAILURE;
+  }
+  const char* external_c = SDL_GetAndroidExternalStoragePath();
+  std::string external_dir = external_c ? external_c : "";
+  if (external_dir.empty()) {
+    external_dir = std::string("/storage/emulated/0/Android/data/com.rexauto.port.") +
+                   kAppIdentifier + "/files";
+  }
+
+  const std::string game_root = ReadTrimmedFile(external_dir + "/" + kConfigFileName);
+  std::error_code ec;
+  std::filesystem::create_directories(external_dir + "/data", ec);
+  const std::string log_dir = ResolveLogDir(external_dir);
+
+  rex::SetAndroidApplicationContext(java_vm, SDL_GetAndroidActivity(), lib_dir.c_str());
+  rex::thread::AndroidInitialize();
+  rex::memory::AndroidInitialize();
+  rex::filesystem::AndroidInitialize();
+
+  std::vector<std::string> args;
+  args.emplace_back(kAppIdentifier);
+  if (!game_root.empty()) {
+    args.emplace_back(fmt::format("--game_data_root={}", game_root));
+  } else {
+    ALOGE("no game_root.txt under %s - re-run setup", external_dir.c_str());
+  }
+  args.emplace_back(fmt::format("--user_data_root={}", external_dir + "/data"));
+  args.emplace_back(fmt::format("--log_file={}/{}.log", log_dir, kAppIdentifier));
+  // Mobile defaults (see hells-gate-recomp-android docs/android_performance):
+  // no per-frame full re-upload of guest memory pages; the write-watch keeps
+  // coherency. Everything below can be overridden by settings.txt.
+  args.emplace_back("--clear_memory_page_state=false");
+  args.emplace_back("--fullscreen=true");
+  for (auto& a : ReadSettingsArgs(external_dir + "/" + kSettingsFileName)) {
+    ALOGI("setting: %s", a.c_str());
+    args.emplace_back(std::move(a));
+  }
+
+  std::vector<char*> argv_ptrs;
+  argv_ptrs.reserve(args.size());
+  for (auto& arg : args) argv_ptrs.push_back(arg.data());
+
+  auto remaining = rex::cvar::Init(static_cast<int>(argv_ptrs.size()), argv_ptrs.data());
+  (void)remaining;
+  rex::cvar::ApplyEnvironment();
+  rex::InitLoggingEarly();
+
+  REXLOG_INFO("android_main: app={} external_dir={} game_root={}", kAppIdentifier,
+              external_dir, game_root);
+
+  int result;
+  {
+    rex::ui::SDLWindowedAppContext app_context;
+    if (!app_context.Initialize()) {
+      REXLOG_ERROR("SDLWindowedAppContext::Initialize failed: {}", SDL_GetError());
+      return EXIT_FAILURE;
+    }
+    const auto creator = rex::ui::WindowedApp::GetCreator(kAppIdentifier);
+    if (!creator) {
+      REXLOG_ERROR("app '{}' is not registered - recompiled code built for another name",
+                   kAppIdentifier);
+      return EXIT_FAILURE;
+    }
+    std::unique_ptr<rex::ui::WindowedApp> app = creator(app_context);
+    if (app->OnInitialize()) {
+      rexport::gamepad::EnsureVirtualPadAttached();
+      result = app_context.RunMainMessageLoop();
+    } else {
+      REXLOG_ERROR("OnInitialize failed - see earlier errors");
+      result = EXIT_FAILURE;
+    }
+    app->InvokeOnDestroy();
+  }
+  REXLOG_INFO("android_main: exiting with code {}", result);
+  return result;
+}
+
+}  // namespace
+
+int main(int argc, char* argv[]) {
+  (void)argc;
+  (void)argv;
+  return RunAndroidApp();
+}
+
+#endif  // REX_PLATFORM_ANDROID

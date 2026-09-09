@@ -1,0 +1,9 @@
+sdk/
+build/
+.gradle/
+app/build/
+app/.cxx/
+app/src/main/java/org/
+app/src/main/assets/
+local.properties
+ci-release.jks

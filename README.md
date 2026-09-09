@@ -129,6 +129,29 @@ PC (or phone via Winlator), copy the game files into its `assets/` folder and ru
 `assets/`, `game/`, `data/` next to the exe and saves go to `userdata/` next to it —
 no absolute paths from the build machine are baked in.
 
+### Android APK (native arm64, no Winlator)
+
+**Actions → Recompile for Android → Run workflow**, same link, same name. Two jobs run:
+the Windows one does codegen + every static heal exactly like above, then an Ubuntu job
+takes the generated C++ and builds it with the ReXGlue SDK v0.10.0 plus the Android patch
+set from [hells-gate-recomp-android](https://github.com/deivid22srk/hells-gate-recomp-android)
+(NDK r27, Vulkan-only, `libmain.so` + `librexgpu-xenos.so`). The `<name>-android-apk`
+artifact is a signed, installable APK:
+
+* the launcher shows **"<Game title> — Android Edition"** (title and Title ID are read from
+  the xex; the name comes from a bundled 3 000-title Xbox 360 database);
+* **Choose ISO / default.xex** — pick the disc image on the phone; the app unpacks the GDFX
+  filesystem itself (also accepts a folder or a bare `default.xex`) into its private
+  storage. A dump of a **different title is refused** by Title ID;
+* **Graphics & performance** — resolution scale, vsync, letterbox, "tolerant mode" (skip
+  calls to unregistered functions instead of crashing), and the mobile perf flag
+  `--clear_memory_page_state=false`;
+* an on-screen gamepad (movable / resizable, haptics) and Bluetooth controllers via SDL.
+
+Every APK of the same project is signed with the same CI key, so a new run installs over
+the previous one and keeps saves. `android/` is a normal Gradle project too:
+`tools/android_sdk.sh` then `cd android && ./gradlew assembleRelease -PrexName=<name> ...`.
+
 ## What it does NOT do
 
 rexauto gets you to a **booting, guest-code-executing build, automatically**. It does **not**

@@ -1,0 +1,303 @@
+# One-click Android APK: Actions -> "Recompile for Android" -> Run workflow,
+# paste a link to the game (default.xex / ISO / GoD / STFS / zip), press the
+# button. Two jobs:
+#
+#   recompile (windows)  the normal rexauto pipeline up to `build` -- extract,
+#                        setjmp, deepextract, codegen + every static heal, and a
+#                        clang build to prove the generated C++ compiles. Its
+#                        output (generated/ + manifest + cures) is the input of:
+#   apk (ubuntu)         ReXGlue SDK v0.10.0 + the Android patch set from
+#                        deivid22srk/hells-gate-recomp-android, NDK r27 build of
+#                        the recompiled code as libmain.so + librexgpu-xenos.so,
+#                        a launcher (SetupActivity) that shows
+#                        "<Game> - Android Edition", takes the ISO, extracts it
+#                        into app storage, gates on Title ID, and exposes the
+#                        graphics settings. Output: <name>-android.apk artifact.
+#
+# The APK embeds code recompiled from the game you supplied; artifacts on a
+# public repo are publicly downloadable. Keep this on a private fork.
+
+name: Recompile for Android
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "Link to default.xex / ISO / GoD / STFS / .zip (direct, Google Drive or Dropbox)"
+        required: true
+        type: string
+      name:
+        description: "Project name (a-z0-9_) -- also the APK id suffix"
+        required: true
+        default: "game"
+        type: string
+      runheal:
+        description: "Also run the Windows run-heal loop first (slower, more functions cured)"
+        required: false
+        default: false
+        type: boolean
+      heal_iters:
+        description: "Max run-heal iterations (if enabled)"
+        required: false
+        default: "4"
+        type: string
+
+run-name: "Android: ${{ inputs.name }}"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ inputs.name }}
+  cancel-in-progress: false
+
+jobs:
+  # ------------------------------------------------------------------ codegen
+  recompile:
+    name: "codegen + static heal (windows)"
+    runs-on: windows-latest
+    timeout-minutes: 350
+    outputs:
+      title: ${{ steps.meta.outputs.title }}
+      title_id: ${{ steps.meta.outputs.title_id }}
+    env:
+      REXAUTO_WORK: ${{ github.workspace }}\autoports
+      REXAUTO_PORTABLE: "1"
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: "utf-8"
+    steps:
+      - name: Validate inputs
+        shell: pwsh
+        run: |
+          if ("${{ inputs.name }}" -notmatch '^[a-z0-9_]{1,40}$') { Write-Host "::error::project name must match [a-z0-9_]"; exit 1 }
+          if ("${{ inputs.url }}".Trim() -notmatch '^https?://') { Write-Host "::error::url must start with http(s)://"; exit 1 }
+
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Python deps
+        shell: pwsh
+        run: python -m pip install -q --upgrade pip pillow
+
+      - name: Toolchain
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath
+          $vcvars = Join-Path $vs "VC\Auxiliary\Build\vcvars64.bat"
+          if (-not (Test-Path $vcvars)) { Write-Host "::error::vcvars64.bat not found"; exit 1 }
+          "VCVARS=$vcvars" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          if (-not (Get-Command clang -ErrorAction SilentlyContinue)) {
+            "CLANG=$env:ProgramFiles\LLVM\bin\clang.exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            "CLANGXX=$env:ProgramFiles\LLVM\bin\clang++.exe" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          }
+
+      - name: Resolve pinned SDK URL
+        id: sdk
+        shell: pwsh
+        run: |
+          $url = (python tools/ci_sdk.py url)
+          "url=$url" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - uses: actions/cache@v4
+        id: sdk-cache
+        with:
+          path: rexglue
+          key: rexglue-sdk-${{ hashFiles('rexauto.py') }}-${{ steps.sdk.outputs.url }}
+
+      - name: Install ReXGlue SDK
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        env:
+          REXGLUE_BUNDLE_URL: ${{ steps.sdk.outputs.url }}
+        run: python tools/ci_sdk.py install
+
+      - name: Verify SDK pin
+        shell: pwsh
+        run: python tools/ci_sdk.py verify
+
+      - name: Download game input
+        id: fetch
+        shell: pwsh
+        run: python tools/ci_fetch.py "${{ inputs.url }}" "${{ runner.temp }}\input"
+
+      - name: Recompile (codegen + static heal + build check)
+        shell: pwsh
+        run: |
+          $args = @("${{ steps.fetch.outputs.container }}", "--name", "${{ inputs.name }}",
+                    "--no-jumptables", "--heal-iters", "${{ inputs.heal_iters }}", "--publish-gabarito")
+          if ("${{ inputs.runheal }}" -ne "true") { $args += @("--until", "build") }
+          New-Item -ItemType Directory -Force "$env:REXAUTO_WORK\${{ inputs.name }}" | Out-Null
+          python rexauto.py @args 2>&1 | Tee-Object -FilePath "$env:REXAUTO_WORK\${{ inputs.name }}\_pipeline.log"
+          exit $LASTEXITCODE
+
+      - name: Title metadata (name, Title ID, cover)
+        id: meta
+        if: always()
+        shell: pwsh
+        run: |
+          $game = "$env:REXAUTO_WORK\${{ inputs.name }}\game"
+          $xex = Get-ChildItem $game -Recurse -Filter default.xex -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($xex) { python tools/title_meta.py "$($xex.FullName)" "${{ runner.temp }}\meta" }
+          else { python tools/title_meta.py "${{ steps.fetch.outputs.container }}" "${{ runner.temp }}\meta" }
+
+      - name: Pack generated port for the APK job
+        if: always()
+        shell: pwsh
+        run: |
+          $port = "$env:REXAUTO_WORK\${{ inputs.name }}\port"
+          if (-not (Test-Path "$port\generated\default\sources.cmake")) { Write-Host "::error::no generated code -- codegen failed, see logs"; exit 1 }
+          $out = "${{ runner.temp }}\port-src"
+          New-Item -ItemType Directory -Force $out | Out-Null
+          # generated/ + src/ + *.toml -- NOT the build tree
+          Copy-Item -Recurse "$port\generated" "$out\generated"
+          Copy-Item -Recurse "$port\src" "$out\src"
+          Get-ChildItem $port -File -Filter *.toml | Copy-Item -Destination $out
+          Get-ChildItem $port -File -Filter *.cmake -ErrorAction SilentlyContinue | Copy-Item -Destination $out
+          # sources.cmake is ${CMAKE_CURRENT_LIST_DIR}-relative -> relocatable as-is
+          Compress-Archive -Path "$out\*" -DestinationPath "${{ runner.temp }}\port-src.zip" -Force
+          Copy-Item "${{ runner.temp }}\meta\cover.png" "${{ runner.temp }}\cover.png" -ErrorAction SilentlyContinue
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: port-src-${{ inputs.name }}
+          path: |
+            ${{ runner.temp }}/port-src.zip
+            ${{ runner.temp }}/cover.png
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-windows-${{ inputs.name }}
+          path: |
+            ${{ env.REXAUTO_WORK }}/${{ inputs.name }}/*.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # ---------------------------------------------------------------------- apk
+  apk:
+    name: "APK (arm64-v8a)"
+    needs: recompile
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: port-src-${{ inputs.name }}
+          path: ${{ runner.temp }}/in
+
+      - name: Unpack port
+        run: |
+          set -euo pipefail
+          mkdir -p autoports/${{ inputs.name }}/port
+          unzip -q "${{ runner.temp }}/in/port-src.zip" -d autoports/${{ inputs.name }}/port
+          ls autoports/${{ inputs.name }}/port
+          ls autoports/${{ inputs.name }}/port/generated/default | head
+          test -f autoports/${{ inputs.name }}/port/src/main.cpp
+          head -8 autoports/${{ inputs.name }}/port/generated/default/sources.cmake
+
+      - name: Host toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libx11-xcb-dev libwayland-dev libwayland-client0 unzip zip
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Cache patched ReXGlue SDK
+        uses: actions/cache@v4
+        id: sdk-cache
+        with:
+          path: android/sdk
+          key: android-sdk-v0.10.0-${{ hashFiles('android/patches/*.patch', 'tools/android_sdk.sh') }}
+
+      - name: ReXGlue SDK (v0.10.0 + Android patches)
+        run: tools/android_sdk.sh
+
+      - name: Android CMake 3.31.1
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null 2>&1 || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "cmake;3.31.1" "ndk;27.2.12479018" >/dev/null
+
+      - name: Stage assets (title DB, cover, launcher icon)
+        run: |
+          set -euo pipefail
+          mkdir -p android/app/src/main/assets
+          cp tools/xbox360_titles.json android/app/src/main/assets/
+          if [ -f "${{ runner.temp }}/in/cover.png" ]; then
+            cp "${{ runner.temp }}/in/cover.png" android/app/src/main/assets/cover.png
+            python3 -m pip install -q pillow
+            python3 tools/android_icon.py "${{ runner.temp }}/in/cover.png" android/app/src/main/res
+          else
+            python3 -m pip install -q pillow
+            python3 tools/android_icon.py gui/rexauto_icon.png android/app/src/main/res
+          fi
+
+      - name: CI signing key (stable across runs)
+        run: |
+          keytool -genkeypair -v -keystore android/ci-release.jks -storepass rexauto -keypass rexauto \
+            -alias rexauto -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=rexauto ${{ inputs.name }}, O=rexauto" >/dev/null 2>&1
+
+      - name: Gradle assembleRelease
+        env:
+          REX_TITLE: ${{ needs.recompile.outputs.title }}
+          REX_TITLE_ID: ${{ needs.recompile.outputs.title_id }}
+        run: |
+          set -euo pipefail
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon --stacktrace \
+            -PrexName="${{ inputs.name }}" \
+            -PrexTitle="${REX_TITLE:-${{ inputs.name }}}" \
+            -PrexTitleId="${REX_TITLE_ID:-00000000}" \
+            -PrexPortDir="$GITHUB_WORKSPACE/autoports/${{ inputs.name }}/port" \
+            -PrexSdkDir="$GITHUB_WORKSPACE/android/sdk/rexglue-sdk" \
+            -PrexVersionCode="${{ github.run_number }}" \
+            -PrexVersionName="1.${{ github.run_number }}"
+
+      - name: Verify APK
+        run: |
+          set -euo pipefail
+          APK=android/app/build/outputs/apk/release/app-release.apk
+          unzip -l "$APK" > /tmp/apk.txt
+          grep -q "lib/arm64-v8a/libmain.so" /tmp/apk.txt || { echo "::error::libmain.so missing"; exit 1; }
+          grep -Eq "lib/arm64-v8a/librexgpu-xenos.*\.so" /tmp/apk.txt || { echo "::error::GPU plugin missing"; exit 1; }
+          grep -q "assets/xbox360_titles.json" /tmp/apk.txt || { echo "::error::title DB missing"; exit 1; }
+          cp "$APK" "${{ runner.temp }}/${{ inputs.name }}-android.apk"
+          SIZE=$(stat -c%s "$APK")
+          {
+            echo "### ✅ ${{ needs.recompile.outputs.title }} — Android Edition"
+            echo ""
+            echo "- Title ID: \`${{ needs.recompile.outputs.title_id }}\`"
+            echo "- APK: \`${{ inputs.name }}-android.apk\` ($((SIZE / 1048576)) MB, arm64-v8a, Vulkan)"
+            echo ""
+            echo "Install the APK, open it, tap **Choose ISO / default.xex**, pick your disc image — it unpacks itself. Then **Graphics & performance**, then **Play**."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.name }}-android-apk
+          path: ${{ runner.temp }}/${{ inputs.name }}-android.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload native build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs-android-${{ inputs.name }}
+          path: |
+            android/app/.cxx/**/*.log
+            android/app/.cxx/**/CMakeOutput.log
+            android/app/.cxx/**/CMakeError.log
+          if-no-files-found: ignore
+          retention-days: 14

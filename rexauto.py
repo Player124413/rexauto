@@ -2133,7 +2133,7 @@ def _inject_portable_paths(ctx):
 
     Why in the app and not the runtime: the SDK's own fallback (game_root.txt
     sidecar, <exe>/game, <exe>) already exists, but the sidecar carries an
-    ABSOLUTE build-machine path (D:\a\...\game on a CI runner) and the SDK's
+    ABSOLUTE build-machine path (D:/a/.../game on a CI runner) and the SDK's
     default user dir is %LOCALAPPDATA% -- both break the moment the folder moves
     to a machine without that layout (Winlator on Android, another PC). The hook
     runs before the runtime is constructed and rewrites every root relative to

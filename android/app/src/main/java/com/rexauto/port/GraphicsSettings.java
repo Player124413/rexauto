@@ -52,6 +52,27 @@ public final class GraphicsSettings {
     public String orientation() { return prefs.getString("orientation", "landscape"); }
     public void setOrientation(String v) { prefs.edit().putString("orientation", v).apply(); }
 
+    /**
+     * Performance preset. Each one is a bundle of runtime cvars on top of the
+     * knobs above; "performance" is the default because a phone GPU is roughly a
+     * tenth of the Xenos+CPU budget the game was tuned for.
+     *
+     *   performance  -- 720p guest mode, 1x scale, no anisotropic filtering, no
+     *                   memexport readback (GPU->CPU sync stall every frame),
+     *                   occlusion queries answered with a constant instead of a
+     *                   GPU round-trip, vsync via FIFO (no tearing, no busy loop),
+     *                   texture cache capped so it never evicts mid-level.
+     *   balanced     -- like performance but 4x anisotropic and real occlusion
+     *                   queries (some games use them for lens flares / LOD).
+     *   accuracy     -- SDK defaults (what the desktop port runs).
+     */
+    public String preset() { return prefs.getString("preset", "performance"); }
+    public void setPreset(String v) { prefs.edit().putString("preset", v).apply(); }
+
+    /** Frame-rate cap 0 = off. 30 halves GPU work for games that already ran at 30 on the 360. */
+    public int fpsCap() { return prefs.getInt("fps_cap", 0); }
+    public void setFpsCap(int v) { prefs.edit().putInt("fps_cap", v).apply(); }
+
     /** Extra raw cvars (advanced): "key=value" per line. */
     public String extra() { return prefs.getString("extra", ""); }
     public void setExtra(String v) { prefs.edit().putString("extra", v == null ? "" : v).apply(); }
@@ -66,6 +87,45 @@ public final class GraphicsSettings {
         m.put("video_mode_width", Integer.toString(videoWidth()));
         m.put("video_mode_height", Integer.toString(videoHeight()));
         m.put("present_letterbox", Boolean.toString(letterbox()));
+
+        // --- preset bundle -------------------------------------------------
+        String p = preset();
+        if (!p.equals("accuracy")) {
+            // no per-frame GPU->CPU copy of memexport buffers; almost no title
+            // reads them back on the CPU, and the sync costs a full frame stall
+            m.put("readback_memexport", "false");
+            m.put("vulkan_readback_memexport", "false");
+            m.put("vulkan_readback_resolve", "false");
+            // texture cache: keep well under what a 4-6 GB phone can give us
+            m.put("texture_cache_memory_limit_soft", "192");
+            m.put("texture_cache_memory_limit_hard", "384");
+            m.put("texture_cache_memory_limit_render_to_texture", "16");
+            // shader compile off the render thread; skip presenting frames the
+            // GPU could not finish in time instead of queueing them up
+            m.put("async_shader_compilation", "true");
+            m.put("vulkan_async_skip_incomplete_frames", "true");
+            // present: FIFO only (mailbox/immediate keep the GPU busy rendering
+            // frames the panel never shows -- pure heat on a phone)
+            m.put("vulkan_allow_present_mode_immediate", "false");
+            m.put("vulkan_allow_present_mode_mailbox", "false");
+            m.put("vulkan_allow_present_mode_fifo_relaxed", "true");
+            // log I/O on the render/guest threads is not free
+            m.put("log_level", "warning");
+            m.put("log_high_frequency_kernel_calls", "false");
+            m.put("vulkan_log_debug_messages", "false");
+            m.put("gpu_debug_markers", "false");
+            // dynamic rendering: no VkRenderPass objects, fewer pipeline variants
+            m.put("vulkan_dynamic_rendering", "true");
+        }
+        if (p.equals("performance")) {
+            m.put("anisotropic_override", "0");          // 0 = off
+            m.put("occlusion_query_enable", "false");    // constant answer, no GPU round-trip
+            m.put("native_2x_msaa", "false");            // resolve 2xMSAA as 1x
+            m.put("gamma_render_target_as_unorm16", "false"); // 8-bit gamma RTs: half the bandwidth
+        } else if (p.equals("balanced")) {
+            m.put("anisotropic_override", "3");          // 4x
+        }
+        if (fpsCap() > 0) m.put("env.REX_FPS_CAP", Integer.toString(fpsCap()));
         // "env.NAME=value" lines are exported as environment variables by the
         // native side (the dispatcher reads REX_HEAL_DISCOVER via getenv).
         if (tolerant()) m.put("env.REX_HEAL_DISCOVER", "1");

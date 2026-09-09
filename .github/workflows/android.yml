@@ -31,6 +31,11 @@ on:
         required: true
         default: "game"
         type: string
+      baseline_arm:
+        description: "Build for plain ARMv8.0 (older 2016-2017 SoCs) instead of ARMv8.2 (default, faster)"
+        required: false
+        default: false
+        type: boolean
       runheal:
         description: "Also run the Windows run-heal loop first (slower, more functions cured)"
         required: false
@@ -253,6 +258,7 @@ jobs:
           REX_TITLE_ID: ${{ needs.recompile.outputs.title_id }}
         run: |
           set -euo pipefail
+          if [ "${{ inputs.baseline_arm }}" = "true" ]; then export REX_ANDROID_BASELINE_ARM=1; fi
           cd android
           chmod +x gradlew
           ./gradlew assembleRelease --no-daemon --stacktrace \

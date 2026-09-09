@@ -25,8 +25,29 @@ set(REXGLUE_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(REXGLUE_USE_VULKAN ON CACHE BOOL "" FORCE)
 set(REXGLUE_USE_D3D12 OFF CACHE BOOL "" FORCE)
 
+# --- mobile performance flags --------------------------------------------------
+# Applied to everything below (SDK runtime, GPU plugin, recompiled code):
+#   * -O3 + thin LTO across the runtime; the SDK adds -O3 itself for Release,
+#     repeated here so the flag also reaches Gradle-injected configs.
+#   * ARMv8.2-A + fp16/dotprod: every 64-bit Android SoC since ~2018 (Snapdragon
+#     660+, Exynos 9810+, Kirin 970+, Dimensity/Helio G) has it; the hot loops
+#     (byte-swapping guest memory, vector ops emitted for VMX128) benefit.
+#     Gated by REX_ANDROID_BASELINE_ARM=1 to fall back to plain armv8-a.
+#   * -fno-plt / -fomit-frame-pointer: fewer indirections per call. The
+#     recompiled code is millions of small functions calling through the
+#     dispatcher; per-call overhead is the CPU bottleneck on phones.
+#   * -fno-semantic-interposition / hidden visibility: lets LTO inline across
+#     the runtime library instead of going through the GOT.
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
   set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
+  set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
+  add_compile_options(-O3 -DNDEBUG -fomit-frame-pointer -fno-plt
+                      -fno-semantic-interposition -fmerge-all-constants
+                      -fno-stack-protector -fno-unwind-tables -fno-asynchronous-unwind-tables)
+  if(NOT DEFINED ENV{REX_ANDROID_BASELINE_ARM})
+    add_compile_options(-march=armv8.2-a+fp16+dotprod -mtune=cortex-a76)
+  endif()
+  add_link_options(-Wl,-O2 -Wl,--gc-sections -Wl,--icf=all -Wl,--as-needed -Wl,-z,now)
 endif()
 
 add_subdirectory("${REXSDK_DIR}" rexglue-sdk)
@@ -59,9 +80,17 @@ endforeach()
 add_library(recomp STATIC ${REX_GEN_SOURCES})
 target_include_directories(recomp PRIVATE "${REX_PORT_DIR}" "${REX_PORT_DIR}/src" "${REX_GEN_DIR}")
 target_precompile_headers(recomp PRIVATE "${REX_GEN_DIR}/${REX_APP_NAME}_pch.h")
+# The generated PPC->C++ is enormous (hundreds of MB of source): strip debug
+# info entirely, keep -O3. (No -fno-exceptions: REX_UNIMPLEMENTED in the
+# generated PCH throws.) No RTTI: nothing in it uses dynamic_cast/typeid.
 target_compile_options(recomp PRIVATE
-    $<$<CXX_COMPILER_ID:Clang,AppleClang>:-gline-tables-only>
-    -Wno-unused-variable -Wno-unused-label -Wno-unused-but-set-variable)
+    -g0 -O3
+    -fno-rtti
+    -fno-math-errno -fno-trapping-math
+    -Wno-unused-variable -Wno-unused-label -Wno-unused-but-set-variable
+    -Wno-unused-value -Wno-parentheses-equality)
+# Data-section relocation pressure: the register/init tables are huge.
+set_target_properties(recomp PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF)
 target_link_libraries(recomp PUBLIC rex::runtime rexui)
 
 # --- app library loaded by SDLActivity ----------------------------------------

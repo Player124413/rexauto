@@ -23,6 +23,16 @@ public class MainActivity extends SDLActivity {
         }
         super.onCreate(savedInstanceState);
         applyOrientation();
+        // Ask the OS for the sustained (thermally stable) clock profile instead of
+        // the burst-then-throttle default, and never dim while playing.
+        android.view.Window w = getWindow();
+        w.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        if (android.os.Build.VERSION.SDK_INT >= 24) w.setSustainedPerformanceMode(true);
+        if (android.os.Build.VERSION.SDK_INT >= 31) {
+            android.view.WindowManager.LayoutParams lp = w.getAttributes();
+            lp.preferredRefreshRate = 0;
+            w.setAttributes(lp);
+        }
         if (PadSettings.get(this).enabled()) {
             mGamepad = VirtualPadView.install(this);
         }

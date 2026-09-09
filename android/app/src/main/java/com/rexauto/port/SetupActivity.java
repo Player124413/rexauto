@@ -475,6 +475,22 @@ public class SetupActivity extends Activity {
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(pad, pad, pad, pad);
 
+        label(box, R.string.gfx_preset);
+        Spinner preset = new Spinner(this);
+        String[] presets = {"performance", "balanced", "accuracy"};
+        preset.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item,
+                new String[]{getString(R.string.preset_performance), getString(R.string.preset_balanced), getString(R.string.preset_accuracy)}));
+        for (int i = 0; i < presets.length; i++) if (presets[i].equals(gs.preset())) preset.setSelection(i);
+        box.addView(preset);
+
+        label(box, R.string.gfx_fps_cap);
+        Spinner fps = new Spinner(this);
+        int[] caps = {0, 30, 60};
+        fps.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item,
+                new String[]{getString(R.string.fps_off), "30 FPS (cooler, steadier)", "60 FPS"}));
+        for (int i = 0; i < caps.length; i++) if (caps[i] == gs.fpsCap()) fps.setSelection(i);
+        box.addView(fps);
+
         label(box, R.string.gfx_scale);
         Spinner scale = new Spinner(this);
         scale.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item,
@@ -534,6 +550,8 @@ public class SetupActivity extends Activity {
                 .setTitle(R.string.graphics)
                 .setView(sv)
                 .setPositiveButton(android.R.string.ok, (d, w) -> {
+                    gs.setPreset(presets[preset.getSelectedItemPosition()]);
+                    gs.setFpsCap(caps[fps.getSelectedItemPosition()]);
                     gs.setResolutionScale(scale.getSelectedItemPosition() + 1);
                     gs.setPresentEffect(effects[effect.getSelectedItemPosition()]);
                     int[] m = modes[mode.getSelectedItemPosition()];

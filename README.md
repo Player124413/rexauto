@@ -146,9 +146,13 @@ artifact is a signed, installable APK:
   folder** takes an already-extracted game or a multi-part GoD dump
   (`<id>/<header>` + `<header>.data/Data0000…`). A dump of a **different title is
   refused** by Title ID;
-* **Graphics & performance** — resolution scale, vsync, letterbox, "tolerant mode" (skip
-  calls to unregistered functions instead of crashing), and the mobile perf flag
-  `--clear_memory_page_state=false`;
+* **Graphics & performance** — a **Performance / Balanced / Accuracy** preset (Performance
+  is the default: no memexport readback, occlusion queries short-circuited, anisotropic
+  off, FIFO present, capped texture cache, warnings-only log), a **30/60 FPS cap** (implemented
+  as a guest vblank-rate cap, so it also halves GPU work), resolution scale, guest video
+  mode down to 960x540, vsync, letterbox, screen orientation, "tolerant mode"; the native
+  build uses -O3 + ThinLTO, ARMv8.2-A (+fp16/dotprod; `baseline_arm` input for 2016-era
+  SoCs), sustained-performance mode and a raised process priority;
 * **GPU driver** — on Snapdragon phones, import a Turnip / newer Adreno driver zip (the
   same packs Yuzu, Skyline, Dolphin and Winlator use: `meta.json` + `libvulkan_*.so`); it is
   loaded through [libadrenotools](https://github.com/bylaws/libadrenotools) instead of

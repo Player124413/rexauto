@@ -49,4 +49,10 @@
     <string name="orient_portrait">Portrait (vertical)</string>
     <string name="orient_landscape">Landscape (horizontal, default)</string>
     <string name="orient_auto">Follow device rotation</string>
+    <string name="gfx_preset">Performance preset</string>
+    <string name="preset_performance">Performance (default for phones)</string>
+    <string name="preset_balanced">Balanced</string>
+    <string name="preset_accuracy">Accuracy (desktop defaults)</string>
+    <string name="gfx_fps_cap">Frame-rate cap</string>
+    <string name="fps_off">Off (display rate)</string>
 </resources>

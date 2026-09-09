@@ -19,6 +19,7 @@
 
 #include <android/log.h>
 #include <dlfcn.h>
+#include <sys/resource.h>
 #include <jni.h>
 
 #include <cstdint>
@@ -155,6 +156,9 @@ void LoadCustomVulkanDriver(const std::string& internal_dir, const std::string& 
 }
 
 int RunAndroidApp() {
+  // Foreground apps may lower their own nice value down to -10 without any
+  // permission; the guest threads inherit it. Ignored (EACCES) if refused.
+  setpriority(PRIO_PROCESS, 0, -10);
   const std::string lib_dir = QueryNativeLibraryDir();
   JavaVM* java_vm = QueryJavaVm();
   if (lib_dir.empty()) ALOGE("nativeLibraryDir unresolved - GPU plugin loading will fail");
@@ -209,6 +213,13 @@ int RunAndroidApp() {
   // title renders nothing. librexgpu-xenos.so ships in the APK; the SDK
   // resolves "xenos" against nativeLibraryDir (SetAndroidApplicationContext).
   args.emplace_back("--gpu_plugin=xenos");
+  // Mobile pacing defaults (all overridable from settings.txt): the guest
+  // thread scheduler must not try to pin threads to the 360's 6 hardware
+  // threads (we have big.LITTLE and want the kernel to migrate freely), and
+  // the vsync worker should sleep, not spin.
+  args.emplace_back("--ignore_thread_affinities=true");
+  args.emplace_back("--ignore_thread_priorities=true");
+  args.emplace_back("--log_flush_interval=5");  // batch log writes
   for (auto& a : ReadSettingsArgs(external_dir + "/" + kSettingsFileName)) {
     ALOGI("setting: %s", a.c_str());
     args.emplace_back(std::move(a));

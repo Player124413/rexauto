@@ -1,5 +1,5 @@
 diff --git a/src/system/function_dispatcher.cpp b/src/system/function_dispatcher.cpp
-index bd43109..6c2d9fe 100644
+index eb06a16..db2c3d2 100644
 --- a/src/system/function_dispatcher.cpp
 +++ b/src/system/function_dispatcher.cpp
 @@ -23,6 +23,10 @@
@@ -13,25 +13,29 @@ index bd43109..6c2d9fe 100644
  namespace rex::runtime {
  
  namespace {
-@@ -35,8 +39,25 @@ FunctionDispatcher* GetBoundFunctionDispatcher() {
+@@ -35,11 +39,26 @@ FunctionDispatcher* GetBoundFunctionDispatcher() {
  }  // namespace
  
  static void InvalidFunctionTrap(PPCContext& ctx, uint8_t* /*base*/) {
--  REX_FATAL("Call to invalid or unregistered function at guest address 0x{:08X}",
--            ctx.last_indirect_target);
-+  uint32_t target = ctx.last_indirect_target;
-+  // REX_HEAL_DISCOVER ("tolerant mode" in the Android launcher): log the
-+  // target once and RETURN instead of aborting. A target of 0 is usually the
-+  // title calling through a pointer it never filled in; skipping the call is
-+  // what real hardware effectively did. Opt-in because state may be
-+  // inconsistent afterwards.
-+  static const bool discover = std::getenv("REX_HEAL_DISCOVER") != nullptr;
-+  if (discover) {
+-  REXLOG_ERROR("Call to unresolved function at guest address 0x{:08X} (returning)",
+-              ctx.last_indirect_target);
+-  // Return instead of crashing. Many indirect call targets are runtime-computed
+-  // vtable entries that static analysis cannot discover. Returning is safer
+-  // than crashing and lets the game continue past non-critical callbacks.
++  const uint32_t target = ctx.last_indirect_target;
++  // Tolerant mode (REX_HEAL_DISCOVER, the launcher's "tolerant" switch): log
++  // each unresolved target once and return -- many are runtime-computed vtable
++  // entries static analysis could not see, and a target of 0 is the title
++  // calling through a pointer it never filled in. Otherwise abort loudly, so a
++  // real missing function is visible instead of silently corrupting state.
++  static const bool tolerant = std::getenv("REX_HEAL_DISCOVER") != nullptr;
++  if (tolerant) {
 +    static std::mutex mtx;
 +    static std::unordered_set<uint32_t> seen;
 +    std::lock_guard<std::mutex> lk(mtx);
 +    if (seen.insert(target).second) {
-+      REXLOG_WARN("Call to invalid or unregistered function at guest address 0x{:08X}", target);
++      REXLOG_WARN("Call to invalid or unregistered function at guest address 0x{:08X} (returning)",
++                  target);
 +    }
 +    return;
 +  }

@@ -1,0 +1,61 @@
+diff --git a/src/system/mmio_handler.cpp b/src/system/mmio_handler.cpp
+index e6a89be..de2c155 100644
+--- a/src/system/mmio_handler.cpp
++++ b/src/system/mmio_handler.cpp
+@@ -544,12 +544,12 @@ bool MMIOHandler::ExceptionCallback(arch::Exception* ex) {
+       if (!first_fault_at_pc) {
+         ++emplace_result.first->second;
+       }
+-      if (first_fault_at_pc) {
+-        REXLOG_ERROR("Access violation faulting PC: 0x{:016X} (first occurrence)",
+-                     (uint64_t)rip);
+-      } else if ((fault_count_total % 1000) == 0) {
+-        REXLOG_ERROR(
+-            "Access violations so far: {} total, {} distinct faulting PCs",
++      // Write-watch faults are the normal CPU->GPU coherency mechanism, not
++      // errors: on a phone the log line itself (logcat socket + file flush)
++      // is the expensive part. Report only every 100k, at info level.
++      if ((fault_count_total % 100000) == 0) {
++        REXLOG_INFO(
++            "write-watch faults so far: {} total, {} distinct faulting PCs",
+             fault_count_total, fault_count_per_pc.size());
+       }
+ #if REX_PLATFORM_WIN32
+diff --git a/src/ui/vulkan/vulkan_instance.cpp b/src/ui/vulkan/vulkan_instance.cpp
+index 914b311..e30544e 100644
+--- a/src/ui/vulkan/vulkan_instance.cpp
++++ b/src/ui/vulkan/vulkan_instance.cpp
+@@ -18,6 +18,7 @@
+ #include <rex/cvar.h>
+ #include <rex/logging.h>
+ #include <rex/platform.h>
++#include <rex/ui/flags.h>
+ #include <rex/ui/vulkan/instance.h>
+ #include <rex/ui/vulkan/presenter.h>
+ 
+@@ -25,7 +26,11 @@
+ #include "vulkan_moltenvk.h"
+ #endif
+ 
++#if REX_PLATFORM_ANDROID
++REXCVAR_DEFINE_BOOL(vulkan_log_debug_messages, false, "UI/Vulkan", "Log Vulkan debug messages");
++#else
+ REXCVAR_DEFINE_BOOL(vulkan_log_debug_messages, true, "UI/Vulkan", "Log Vulkan debug messages");
++#endif
+ 
+ namespace rex {
+ namespace ui {
+@@ -132,6 +137,13 @@ std::unique_ptr<VulkanInstance> VulkanInstance::Create(const bool with_surface,
+         &vulkan_instance->extensions_.ext_1_1_KHR_get_physical_device_properties2);
+   }
+   // #129.
++  // Android: the Qualcomm driver emits a VKDBGUTILWARN003 "performance" note
++  // for a large share of draw-time calls once a messenger is installed --
++  // hundreds per second, each formatted + logged on the render thread. Only
++  // request the extension when debug logging is explicitly wanted.
++#if REX_PLATFORM_ANDROID
++  if (REXCVAR_GET(vulkan_log_debug_messages) && REXCVAR_GET(vulkan_validation_enabled))
++#endif
+   requested_extensions.emplace("VK_EXT_debug_utils",
+                                &vulkan_instance->extensions_.ext_EXT_debug_utils);
+   // #395.

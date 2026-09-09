@@ -239,6 +239,33 @@ jobs:
           compression-level: 6
           retention-days: 14
 
+      # full recompiled project: generated C++ + src/ + *.toml + CMake files
+      # (everything needed to rebuild / patch the port on a PC; no build tree)
+      - name: Collect project sources
+        if: always()
+        shell: pwsh
+        run: |
+          $name = "${{ inputs.name }}"
+          $port = "$env:REXAUTO_WORK\$name\port"
+          $out = "${{ runner.temp }}\source-$name"
+          if (-not (Test-Path $port)) { Write-Host "no port dir"; exit 0 }
+          New-Item -ItemType Directory -Force $out | Out-Null
+          foreach ($d in @("generated", "src", "cmake", "assets")) {
+            if (Test-Path "$port\$d") { Copy-Item -Recurse "$port\$d" "$out\$d" }
+          }
+          Get-ChildItem $port -File | Where-Object { $_.Extension -in ".toml", ".json", ".cmake", ".txt", ".md", ".h", ".cpp" } | Copy-Item -Destination $out
+          Copy-Item "$env:REXAUTO_WORK\$name\.rexauto_state" $out -ErrorAction SilentlyContinue
+          "source=true" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Upload project sources
+        if: always() && env.source == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-${{ inputs.name }}
+          path: ${{ runner.temp }}\source-${{ inputs.name }}
+          compression-level: 9
+          retention-days: 14
+
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4

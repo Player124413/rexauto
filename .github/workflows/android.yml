@@ -171,7 +171,7 @@ jobs:
             ${{ runner.temp }}/port-src.zip
             ${{ runner.temp }}/cover.png
           if-no-files-found: error
-          retention-days: 3
+          retention-days: 14
 
       - name: Upload logs
         if: always()
@@ -295,6 +295,36 @@ jobs:
           name: ${{ inputs.name }}-android-apk
           path: ${{ runner.temp }}/${{ inputs.name }}-android.apk
           if-no-files-found: error
+          retention-days: 14
+
+      # complete Android project: launcher app + recompiled port sources, ready
+      # to open in Android Studio (SDK + build outputs excluded)
+      - name: Collect project sources
+        if: always()
+        run: |
+          set -uo pipefail
+          OUT="${{ runner.temp }}/source-${{ inputs.name }}"
+          mkdir -p "$OUT"
+          rsync -a --exclude sdk --exclude build --exclude .gradle --exclude '*.jks' android/ "$OUT/android/"
+          [ -d "autoports/${{ inputs.name }}/port" ] && rsync -a --exclude build "autoports/${{ inputs.name }}/port/" "$OUT/port/"
+          cp tools/android_sdk.sh "$OUT/" && cp -r android/patches "$OUT/android/" 2>/dev/null || true
+          cat > "$OUT/README.txt" <<EOF2
+          ${{ inputs.name }} -- Android project sources
+          android/   launcher app (Gradle project)
+          port/      recompiled game (generated C++ + src + *.toml)
+          Build: run tools/android_sdk.sh (needs android/sdk), then
+            cd android && ./gradlew assembleRelease -PrexName=${{ inputs.name }} \
+              -PrexPortDir=\$PWD/../port -PrexSdkDir=\$PWD/sdk/rexglue-sdk
+          EOF2
+          du -sh "$OUT"
+
+      - name: Upload project sources
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-${{ inputs.name }}
+          path: ${{ runner.temp }}/source-${{ inputs.name }}
+          compression-level: 9
           retention-days: 14
 
       - name: Upload native build logs on failure

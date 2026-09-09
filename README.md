@@ -118,7 +118,9 @@ No PC handy? The repo ships a workflow that does the whole pipeline on a hosted 
    the green button.
 3. When it finishes, the `port-<name>` artifact holds `<name>.exe`, the runtime DLLs and
    `play <name>.cmd`; `logs-<name>` has every log; `gabarito-<name>` has the cures the heal
-   loop found (drop them into `gabaritos/` to skip the heal next time).
+   loop found (drop them into `gabaritos/` to skip the heal next time); `source-<name>` is
+   the full recompiled project (generated C++, `src/`, `*.toml`, CMake files) for rebuilding
+   or patching the port on a PC.
 
 The runner installs the pinned ReXGlue SDK by itself (cached across runs) and uses the
 clang / VS Build Tools already on `windows-latest`. IDA isn't available there, so the
@@ -136,7 +138,8 @@ the Windows one does codegen + every static heal exactly like above, then an Ubu
 takes the generated C++ and builds it with the ReXGlue SDK v0.10.0 plus the Android patch
 set from [hells-gate-recomp-android](https://github.com/deivid22srk/hells-gate-recomp-android)
 (NDK r27, Vulkan-only, `libmain.so` + `librexgpu-xenos.so`). The `<name>-android-apk`
-artifact is a signed, installable APK:
+artifact is a signed, installable APK; `source-<name>` holds the complete Android Studio
+project (launcher app + recompiled port sources) and `port-src-<name>` the bare port:
 
 * the launcher shows **"<Game title> — Android Edition"** (title and Title ID are read from
   the xex; the name comes from a bundled 3 000-title Xbox 360 database);

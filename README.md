@@ -124,7 +124,10 @@ The runner installs the pinned ReXGlue SDK by itself (cached across runs) and us
 clang / VS Build Tools already on `windows-latest`. IDA isn't available there, so the
 jumptables stage is skipped; the run-heal loop is on by default (`runheal` input) and can
 be turned off for a quick build-only pass. Unzip the artifact next to the game folder on a
-PC and run `play <name>.cmd` to test.
+PC (or phone via Winlator), copy the game files into its `assets/` folder and run
+`play <name>.cmd` or the exe. The port is **portable**: the game is looked up in
+`assets/`, `game/`, `data/` next to the exe and saves go to `userdata/` next to it —
+no absolute paths from the build machine are baked in.
 
 ## What it does NOT do
 

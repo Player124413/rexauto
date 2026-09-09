@@ -1342,7 +1342,13 @@ def write_game_root(ctx):
     double-clicking the exe (no --game_data_root) still launches the title -- the
     runtime reads this when the flag is absent."""
     try:
-        if ctx.game and os.path.isdir(ctx.game):
+        # The sidecar is an absolute build-machine path; the SDK ignores it when
+        # that path has no default.xex, and the port's OnConfigurePaths hook
+        # (_inject_portable_paths) takes assets/|game/|data/ beside the exe
+        # first, so a moved folder never sees this value. Skipped entirely under
+        # REXAUTO_PORTABLE=1 (the CI workflow sets it) so nothing of the build
+        # machine's layout ships in the artifact at all.
+        if ctx.game and os.path.isdir(ctx.game) and not os.environ.get("REXAUTO_PORTABLE"):
             with open(os.path.join(ctx.builddir, "game_root.txt"), "w", encoding="utf-8") as f:
                 f.write(os.path.abspath(ctx.game) + "\n")
     except OSError as ex:
@@ -1437,11 +1443,23 @@ def write_play_launcher(ctx):
             # "--game_data_root was not provided" and exits. Naming it here works
             # on both and costs nothing.
             root = os.path.abspath(ctx.game) if ctx.game else ""
+            # Portable first: a game folder that travelled WITH the port (assets/,
+            # game/, data/ beside the exe) wins over the build machine's absolute
+            # path, which does not exist on the phone / other PC this was copied to.
+            f.write(
+                "set ROOT=\r\n"
+                'if exist "%~dp0assets\\default.xex" set "ROOT=%~dp0assets"\r\n'
+                'if not defined ROOT if exist "%~dp0game\\default.xex" set "ROOT=%~dp0game"\r\n'
+                'if not defined ROOT if exist "%~dp0data\\default.xex" set "ROOT=%~dp0data"\r\n'
+                'if not defined ROOT if exist "%~dp0default.xex" set "ROOT=%~dp0."\r\n')
             if root:
-                f.write('start "" "%%~dp0%s.exe" --game_data_root="%s" %%*\r\n'
-                        % (ctx.name, root))
-            else:
-                f.write('start "" "%%~dp0%s.exe" %%*\r\n' % ctx.name)
+                f.write('if not defined ROOT if exist "%s\\default.xex" set "ROOT=%s"\r\n'
+                        % (root, root))
+            f.write('if defined ROOT (\r\n'
+                    '  start "" "%%~dp0%s.exe" --game_data_root="%%ROOT%%" %%*\r\n'
+                    ') else (\r\n'
+                    '  start "" "%%~dp0%s.exe" %%*\r\n'
+                    ')\r\n' % (ctx.name, ctx.name))
     except OSError as ex:
         ctx.log("could not write the play launcher (%s)" % ex)
 
@@ -2047,6 +2065,102 @@ def _appglue_body(ctx, glue):
     return body, includes
 
 
+PORTABLE_PATHS_MARK = "rexauto: portable paths"
+
+PORTABLE_PATHS_HOOK = r"""
+  // rexauto: portable paths -- the port must run from wherever its folder is
+  // dropped (a phone running Winlator, a USB stick, another PC), so nothing is
+  // allowed to depend on the drive/letter layout of the machine that built it.
+  // The game data is taken RELATIVE TO THE EXE, first match wins:
+  //   <exe>/assets/   <exe>/game/   <exe>/data/   <exe>/   <exe>/../assets/  ...
+  // (an explicit --game_data_root still wins). The user/cache/metadata roots
+  // are pinned beside the exe too, so a build machine's %LOCALAPPDATA% path
+  // never leaks into the port and saves travel with the folder.
+  void OnConfigurePaths(rex::PathConfig& paths) override {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    const fs::path exe_dir = rex::filesystem::GetExecutableFolder();
+    auto has_title = [&](const fs::path& p) {
+      return fs::is_regular_file(p / "default.xex", ec) ||
+             fs::is_regular_file(p / "Default.xex", ec) ||
+             fs::is_regular_file(p / "DEFAULT.XEX", ec);
+    };
+    auto find_title = [&](const fs::path& root) -> fs::path {
+      for (const char* sub : {"assets", "game", "data", "."}) {
+        fs::path p = (std::string_view(sub) == ".") ? root : root / sub;
+        if (has_title(p)) return p;
+      }
+      return {};
+    };
+    const bool explicit_root =
+        !paths.game_data_root.empty() && has_title(paths.game_data_root) &&
+        std::getenv("REX_PORTABLE_ONLY") == nullptr;
+    if (!explicit_root) {
+      fs::path found = find_title(exe_dir);
+      if (found.empty()) found = find_title(exe_dir.parent_path());
+      if (found.empty()) {
+        // one level of nesting: <exe>/assets/<anything>/default.xex
+        for (const char* sub : {"assets", "game", "data"}) {
+          fs::path base = exe_dir / sub;
+          if (!fs::is_directory(base, ec)) continue;
+          for (const auto& d : fs::directory_iterator(base, ec)) {
+            if (d.is_directory(ec) && has_title(d.path())) { found = d.path(); break; }
+          }
+          if (!found.empty()) break;
+        }
+      }
+      if (!found.empty()) paths.game_data_root = fs::absolute(found, ec);
+    }
+    // portable user data: <exe>/userdata (saves, config, cache, metadata)
+    if (std::getenv("REX_NO_PORTABLE_USERDATA") == nullptr) {
+      const fs::path user = exe_dir / "userdata";
+      fs::create_directories(user, ec);
+      if (fs::is_directory(user, ec)) {
+        paths.user_data_root = user;
+        paths.cache_root = user / "cache";
+        paths.metadata_root = user / "metadata";
+        if (paths.config_path.empty() ||
+            !fs::exists(paths.config_path, ec))
+          paths.config_path = user / "config.toml";
+      }
+    }
+  }
+"""
+
+
+def _inject_portable_paths(ctx):
+    """Add the OnConfigurePaths override above to src/<name>_app.h (idempotent).
+
+    Why in the app and not the runtime: the SDK's own fallback (game_root.txt
+    sidecar, <exe>/game, <exe>) already exists, but the sidecar carries an
+    ABSOLUTE build-machine path (D:\a\...\game on a CI runner) and the SDK's
+    default user dir is %LOCALAPPDATA% -- both break the moment the folder moves
+    to a machine without that layout (Winlator on Android, another PC). The hook
+    runs before the runtime is constructed and rewrites every root relative to
+    the exe. REXAUTO_NO_PORTABLE_PATHS=1 skips it."""
+    if os.environ.get("REXAUTO_NO_PORTABLE_PATHS"):
+        return
+    app = os.path.join(ctx.port, "src", "%s_app.h" % ctx.name)
+    if not os.path.exists(app):
+        return
+    txt = open(app, encoding="utf-8", errors="ignore").read()
+    if PORTABLE_PATHS_MARK in txt:
+        return
+    inc = "#include <rex/rex_app.h>"
+    if inc in txt and "<rex/filesystem.h>" not in txt:
+        txt = txt.replace(inc, inc + "\n#include <rex/filesystem.h>  // rexauto: portable paths\n"
+                          "#include <cstdlib>\n#include <string_view>", 1)
+    # insert right after the `public:` of the app class, before Create()
+    m = re.search(r"class \w+App\s*:\s*public rex::ReXApp\s*\{\s*\n\s*public:\s*\n", txt)
+    if not m:
+        ctx.log("  portable paths: could not find the app class in %s_app.h -> skipped" % ctx.name)
+        return
+    txt = txt[:m.end()] + PORTABLE_PATHS_HOOK + "\n" + txt[m.end():]
+    open(app, "w", encoding="utf-8").write(txt)
+    ctx.log("  portable paths: %s_app.h now resolves game data from <exe>/assets|game|data "
+            "and keeps saves in <exe>/userdata" % ctx.name)
+
+
 def _inject_app_glue(ctx, mods, glue):
     """Patch src/<name>_app.h: keep the existing extra-module extern/dispatcher
     block verbatim, and append the per-title appglue sections into the SAME
@@ -2292,6 +2406,7 @@ def setup_extra_modules(ctx):
         _warn_colliding_tables(ctx, mods)
         _strip_legacy_module_glue(ctx)
     _inject_app_glue(ctx, [], glue)
+    _inject_portable_paths(ctx)
     _inject_pch_into_cmake(ctx)
 
 

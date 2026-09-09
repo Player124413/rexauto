@@ -66,6 +66,7 @@ jobs:
     env:
       REXAUTO_WORK: ${{ github.workspace }}\autoports
       PYTHONUTF8: "1"
+      REXAUTO_PORTABLE: "1"
       PYTHONIOENCODING: "utf-8"
     steps:
       - name: Validate inputs
@@ -185,6 +186,18 @@ jobs:
             Get-ChildItem $bd -Filter *.dll | Copy-Item -Destination $out
             Get-ChildItem $bd -Filter "play*.cmd" | Copy-Item -Destination $out
             Get-ChildItem $bd -Filter *.pdb -ErrorAction SilentlyContinue | Copy-Item -Destination $out
+            # portable layout: the exe looks for the game in assets/ (then game/, data/)
+            # next to itself -- drop the game files there, no paths to edit anywhere
+            New-Item -ItemType Directory -Force "$out\assets" | Out-Null
+            @(
+              "Put the game files here (default.xex + everything that was next to it).",
+              "",
+              "The exe finds them by itself: assets\, then game\, then data\, then its own folder.",
+              "Saves/config/cache are written to userdata\ next to the exe.",
+              "Works from any drive / folder / Winlator prefix - no absolute paths involved.",
+              "",
+              "Start: play $name.cmd   (or $name.exe directly)"
+            ) | Out-File "$out\assets\PUT_GAME_FILES_HERE.txt" -Encoding utf8
             "exe=true" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
             $mb = [math]::Round((Get-Item "$bd\$name.exe").Length / 1MB, 1)
             "### ✅ $name.exe built ($mb MB)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
@@ -215,7 +228,7 @@ jobs:
           Get-ChildItem "$work\port" -File -Filter *.log -ErrorAction SilentlyContinue | Copy-Item -Destination $logs
           Get-ChildItem $bd -File -Filter *.log -ErrorAction SilentlyContinue | Copy-Item -Destination $logs
           "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
-          "Unzip the port artifact next to your game folder and run ``play $name.cmd`` (or ``$name.exe --game_data_root=<game folder>``)." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "Unzip the port artifact, copy the game files (default.xex + the rest) into its ``assets\`` folder and run ``play $name.cmd`` or ``$name.exe``. No paths to edit - works on any PC / Winlator." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
       - name: Upload port
         if: always() && env.exe == 'true'

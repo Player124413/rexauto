@@ -22,9 +22,22 @@ public class MainActivity extends SDLActivity {
             return;
         }
         super.onCreate(savedInstanceState);
+        applyOrientation();
         if (PadSettings.get(this).enabled()) {
             mGamepad = VirtualPadView.install(this);
         }
+    }
+
+    /** Orientation chosen in the launcher (Graphics dialog); portrait by default. */
+    private void applyOrientation() {
+        String o = new GraphicsSettings(this).orientation();
+        int req;
+        switch (o) {
+            case "landscape": req = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE; break;
+            case "auto": req = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_FULL_USER; break;
+            default: req = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT;
+        }
+        setRequestedOrientation(req);
     }
 
     @Override

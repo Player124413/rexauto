@@ -498,6 +498,14 @@ public class SetupActivity extends Activity {
         for (int i = 0; i < modes.length; i++) if (modes[i][0] == gs.videoWidth()) mode.setSelection(i);
         box.addView(mode);
 
+        label(box, R.string.gfx_orientation);
+        Spinner orient = new Spinner(this);
+        String[] orients = {"portrait", "landscape", "auto"};
+        orient.setAdapter(new ArrayAdapter<>(this, android.R.layout.simple_spinner_dropdown_item,
+                new String[]{getString(R.string.orient_portrait), getString(R.string.orient_landscape), getString(R.string.orient_auto)}));
+        for (int i = 0; i < orients.length; i++) if (orients[i].equals(gs.orientation())) orient.setSelection(i);
+        box.addView(orient);
+
         CheckBox vsync = new CheckBox(this);
         vsync.setText(R.string.gfx_vsync);
         vsync.setChecked(gs.vsync());
@@ -530,6 +538,7 @@ public class SetupActivity extends Activity {
                     gs.setPresentEffect(effects[effect.getSelectedItemPosition()]);
                     int[] m = modes[mode.getSelectedItemPosition()];
                     gs.setVideoMode(m[0], m[1]);
+                    gs.setOrientation(orients[orient.getSelectedItemPosition()]);
                     gs.setVsync(vsync.isChecked());
                     gs.setLetterbox(letterbox.isChecked());
                     gs.setTolerant(tolerant.isChecked());

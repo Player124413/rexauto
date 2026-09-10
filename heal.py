@@ -691,3 +691,59 @@ def register_functions(addrs, toml_path):
     if added:
         write_overrides(toml_path, ov)
     return added
+
+
+# --- static dangling-label check ----------------------------------------------
+_GOTO_RE = re.compile(r"\bgoto loc_([0-9A-Fa-f]{8})\b")
+_LABEL_RE = re.compile(r"^\s*loc_([0-9A-Fa-f]{8}):")
+_ANYDEF_RE = re.compile(r"DEFINE_REX_FUNC\(")
+
+
+def dangling_gotos(gen_dir):
+    """[(abs_cpp_path, line_no, target)] for every `goto loc_T` whose label is
+    not declared in the SAME function body -- exactly what clang later reports
+    as "use of undeclared label", found in seconds instead of after a full
+    compile. C++ labels are function-scoped, so the check is per
+    DEFINE_REX_FUNC body. Empty list => the build cannot fail on labels."""
+    out = []
+    if not os.path.isdir(gen_dir):
+        return out
+    for fp in sorted(glob.glob(os.path.join(gen_dir, "*.cpp"))):
+        with open(fp, "r", errors="ignore") as f:
+            lines = f.readlines()
+        # split into function bodies
+        bounds = [i for i, l in enumerate(lines) if _ANYDEF_RE.search(l)]
+        bounds.append(len(lines))
+        for bi in range(len(bounds) - 1):
+            s, e = bounds[bi], bounds[bi + 1]
+            labels, gotos = set(), []
+            for i in range(s, e):
+                l = lines[i]
+                m = _LABEL_RE.match(l)
+                if m:
+                    labels.add(m.group(1).upper())
+                if "goto loc_" in l:
+                    for g in _GOTO_RE.finditer(l):
+                        gotos.append((i + 1, g.group(1).upper()))
+            for ln, t in gotos:
+                if t not in labels:
+                    out.append((fp, ln, int(t, 16)))
+    return out
+
+
+def write_synthetic_label_log(gen_dir, path):
+    """Write clang-shaped "use of undeclared label" lines for every dangling
+    goto in gen_dir so the existing heal (UNDECL regex, heal_boundaries,
+    forced_landings_from_log) runs on it unchanged. Returns the count (0 =>
+    nothing written, file removed)."""
+    errs = dangling_gotos(gen_dir)
+    if not errs:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        return 0
+    with open(path, "w", encoding="utf-8") as f:
+        for fp, ln, t in errs:
+            f.write("%s:%d:24: error: use of undeclared label 'loc_%08X'\n" % (fp, ln, t))
+    return len(errs)

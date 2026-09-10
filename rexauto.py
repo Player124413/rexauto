@@ -3199,7 +3199,10 @@ def stage_build(ctx):
     last_ends = None
     oom_parallel = None
     skip_codegen = False
-    for attempt in range(1, MAX_BUILD_ATTEMPTS + 1):
+    attempt = 0
+    static_rounds = 0
+    while attempt < MAX_BUILD_ATTEMPTS:
+        attempt += 1
         ctx.log("codegen + build (attempt %d/%d)" % (attempt, MAX_BUILD_ATTEMPTS))
         if skip_codegen:
             skip_codegen = False  # OOM retry: generated/ is already current
@@ -3326,8 +3329,36 @@ def stage_build(ctx):
                 ctx._cure_origin = getattr(ctx, "_cure_origin", {})
                 ctx._cure_origin["static_trap"] =                     ctx._cure_origin.get("static_trap", 0) + nr + ns
                 do_codegen(ctx)
-        logp, rc = do_build(ctx, bat, attempt=attempt)
-        txt = _heal._read_text(logp)
+        # Static label check BEFORE spending a build on it. Every dangling
+        # `goto loc_T` in generated/ is a guaranteed "use of undeclared label"
+        # from clang -- but clang only says so after compiling all ~300 TUs
+        # (three hours on Sonic Generations, per heal round). The same errors
+        # are visible in the generated text in seconds, so synthesise the
+        # compiler lines and run the very same heal on them; the compiler is
+        # only invoked once the tree is label-clean. REXAUTO_NO_STATIC_LABELS=1
+        # restores the old behaviour.
+        static_log = None
+        if not os.environ.get("REXAUTO_NO_STATIC_LABELS") and static_rounds < 40:
+            _slog = os.path.join(ctx.work, "_static_labels.log")
+            _n = 0
+            for _o in _heal_owners(ctx):
+                _n += _heal.write_synthetic_label_log(_o.gen, _slog + "." + _o.name)
+            if _n:
+                with open(_slog, "w", encoding="utf-8") as _f:
+                    for _o in _heal_owners(ctx):
+                        _p = _slog + "." + _o.name
+                        if os.path.exists(_p):
+                            _f.write(open(_p, encoding="utf-8").read())
+                static_log = _slog
+                static_rounds += 1
+                attempt -= 1  # a static round costs seconds, not a build slot
+                ctx.log("  static label check: %d dangling goto(s) in generated/ "
+                        "(round %d) -> healing before the build" % (_n, static_rounds))
+        if static_log:
+            logp, rc, txt = static_log, 1, _heal._read_text(static_log)
+        else:
+            logp, rc = do_build(ctx, bat, attempt=attempt)
+            txt = _heal._read_text(logp)
         if rc == 0 and os.path.exists(ctx.exe):
             write_game_root(ctx)
             ctx.log("build OK -> %s" % ctx.exe)

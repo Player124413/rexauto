@@ -747,3 +747,42 @@ def write_synthetic_label_log(gen_dir, path):
         for fp, ln, t in errs:
             f.write("%s:%d:24: error: use of undeclared label 'loc_%08X'\n" % (fp, ln, t))
     return len(errs)
+
+
+def rewrite_dangling_gotos(gen_dir, log=lambda m: None):
+    """LAST-RESORT safety net so a build can never die on 'use of undeclared
+    label': every `goto loc_T` whose label is not in the same function body is
+    rewritten in place to `{ REX_CALL_INDIRECT_FUNC(0xT); return; }` -- a tail
+    call through the runtime dispatcher, which is exactly what a branch into
+    another routine's body is (and what the SDK itself emits for a
+    TargetKind::Function target). If T is not registered the dispatcher
+    reports it at runtime and the run-heal registers it -- one launch, not a
+    3-hour compile per round. Returns the number of rewritten sites."""
+    errs = dangling_gotos(gen_dir)
+    if not errs:
+        return 0
+    by_file = {}
+    for fp, ln, t in errs:
+        by_file.setdefault(fp, []).append((ln, t))
+    n = 0
+    for fp, sites in by_file.items():
+        with open(fp, "r", errors="ignore") as f:
+            lines = f.readlines()
+        for ln, t in sites:
+            i = ln - 1
+            if i >= len(lines):
+                continue
+            pat = re.compile(r"goto loc_%08X\s*;" % t, re.I)
+            new, k = pat.subn("{ REX_CALL_INDIRECT_FUNC(0x%08Xu); return; } "
+                              "/* rexauto: dangling label -> tail call */" % t, lines[i])
+            if k:
+                lines[i] = new
+                n += k
+        with open(fp, "w", newline="") as f:
+            f.writelines(lines)
+    if n:
+        log("  dangling-label safety net: %d goto(s) into other functions rewritten "
+            "as dispatcher tail calls (%s)" % (
+                n, ", ".join(sorted({"0x%08X" % t for _, _, t in errs})[:8])
+                + (" ..." if len(errs) > 8 else "")))
+    return n

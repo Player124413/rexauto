@@ -1282,6 +1282,14 @@ def do_codegen(ctx, env=None, level="error"):
 def do_build(ctx, bat, attempt=None):
     """Stream the build so ninja's [N/M] progress reaches the UI live."""
     logp = os.path.join(ctx.work, "_build.log")
+    # Whatever the label heal could not converge on must not cost a compile:
+    # rewrite the leftovers to dispatcher tail calls right before ninja runs.
+    if not os.environ.get("REXAUTO_NO_LABEL_NET"):
+        for _o in _heal_owners(ctx):
+            try:
+                _heal.rewrite_dangling_gotos(_o.gen, _o.log)
+            except Exception as _ex:  # never let the net itself break a build
+                _o.log("  dangling-label safety net skipped: %s" % _ex)
     # Two facts decide whether this build's seconds are comparable to another
     # build's, and neither survives into .ninja_log: whether the build dir still
     # had a CMakeCache (so the bat skipped the whole configure) and what -j the
@@ -3354,6 +3362,25 @@ def stage_build(ctx):
                 attempt -= 1  # a static round costs seconds, not a build slot
                 ctx.log("  static label check: %d dangling goto(s) in generated/ "
                         "(round %d) -> healing before the build" % (_n, static_rounds))
+        if static_log and static_rounds >= 3:
+            # Three static rounds without convergence: stop iterating the
+            # landing/boundary heuristics and register every remaining target
+            # as a function entry (tier 3) in one go; whatever still dangles
+            # after that is caught by the do_build safety net.
+            _nreg = 0
+            for _o, _olog in _build_log_by_owner(ctx, static_log):
+                _d = _heal.forced_landings_from_log(_olog)
+                _have = _heal.load_overrides_full(_o.functions)
+                _new = [a for a in _d if a not in _have]
+                if _new:
+                    _nreg += _heal.register_functions(_new, _o.functions)
+            if _nreg:
+                ctx.log("  static label check: registered %d remaining target(s) as "
+                        "function entries; re-running codegen" % _nreg)
+                do_codegen(ctx)
+            static_log = None
+            static_rounds = 0
+            attempt += 1
         if static_log:
             logp, rc, txt = static_log, 1, _heal._read_text(static_log)
         else:

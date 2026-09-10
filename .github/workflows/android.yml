@@ -203,9 +203,10 @@ jobs:
           mkdir -p autoports/${{ inputs.name }}/port
           unzip -q "${{ runner.temp }}/in/port-src.zip" -d autoports/${{ inputs.name }}/port
           ls autoports/${{ inputs.name }}/port
-          ls autoports/${{ inputs.name }}/port/generated/default | head
+          # (no `ls | head` here: with pipefail a SIGPIPE'd ls fails the step)
+          find autoports/${{ inputs.name }}/port/generated/default -maxdepth 1 | sed -n '1,12p'
           test -f autoports/${{ inputs.name }}/port/src/main.cpp
-          head -8 autoports/${{ inputs.name }}/port/generated/default/sources.cmake
+          sed -n '1,8p' autoports/${{ inputs.name }}/port/generated/default/sources.cmake
 
       - name: Host toolchain
         run: |

@@ -259,6 +259,8 @@ jobs:
           Get-ChildItem $work -File -Filter *.log -ErrorAction SilentlyContinue | Copy-Item -Destination $logs
           Get-ChildItem "$work\port" -File -Filter *.log -ErrorAction SilentlyContinue | Copy-Item -Destination $logs
           Get-ChildItem $bd -File -Filter *.log -ErrorAction SilentlyContinue | Copy-Item -Destination $logs
+          Get-ChildItem $bd -File -Filter "rexglue-crash*.txt" -ErrorAction SilentlyContinue | Copy-Item -Destination $logs
+          Get-ChildItem "$bd\userdata" -Recurse -File -Include *.log,*.txt -ErrorAction SilentlyContinue | Copy-Item -Destination $logs -ErrorAction SilentlyContinue
           "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
           "Unzip the port artifact and run **``<Title> Launcher.exe``**: pick your ISO / XBLA package / GoD / default.xex there (it unpacks into ``assets\``), set **Graphics & performance**, press **Play**. Old way still works: drop the game files into ``assets\`` and run ``play $name.cmd``." | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 

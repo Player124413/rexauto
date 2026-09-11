@@ -1920,6 +1920,23 @@ def _seed_module_functions(ctx, m):
                 % (m["key"], os.path.basename(seed)))
     else:
         _heal.write_overrides(fns, {})
+    # Title-ID keyed seeds (seeds/title_<TITLEID>_functions.toml) hold the
+    # addresses users reported from the phone log ("Call to invalid or
+    # unregistered function at guest address 0x...") -- applied on top so a
+    # rebuild ships them without another run-heal round.
+    if m["key"] == "default":
+        try:
+            with open(m["xex"], "rb") as f:
+                tid = (_extract._xex_title_id(f.read(0x10000)) or "").upper()
+        except OSError:
+            tid = ""
+        cand = os.path.join(HERE, "seeds", "title_%s_functions.toml" % tid) if tid else ""
+        if cand and os.path.exists(cand):
+            extra = list(_heal.load_overrides(cand).keys())
+            n = _heal.register_functions(extra, fns)
+            if n:
+                ctx.log("  module '%s': +%d function(s) from title seed %s"
+                        % (m["key"], n, os.path.basename(cand)))
 
 
 def _inject_pch_into_cmake(ctx):

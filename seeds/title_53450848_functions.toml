@@ -1,0 +1,6 @@
+# Sonic Generations (Title ID 53450848) -- functions reported at runtime on
+# device ("Call to invalid or unregistered function at guest address ...").
+# Merged into <name>_functions.toml at codegen time (see _seed_module_functions).
+
+[functions]
+"0x8310BEE0" = {}

@@ -52,7 +52,7 @@ public class SetupActivity extends Activity {
 
     private TextView status;
     private ProgressBar progress;
-    private Button playBtn, pickBtn, pickDirBtn, gfxBtn, driverBtn, resetBtn;
+    private Button playBtn, pickBtn, pickDirBtn, gfxBtn, driverBtn, logsBtn, resetBtn;
     private final Handler ui = new Handler(Looper.getMainLooper());
     private volatile boolean busy;
 
@@ -119,6 +119,7 @@ public class SetupActivity extends Activity {
         pickDirBtn = button(root, R.string.pick_folder, v -> pickFolder());
         gfxBtn = button(root, R.string.graphics, v -> showGraphicsDialog());
         driverBtn = button(root, R.string.gpu_driver, v -> showDriverDialog());
+        logsBtn = button(root, R.string.logs, v -> showLogsDialog());
         resetBtn = button(root, R.string.reset, v -> reset());
 
         ScrollView sv = new ScrollView(this);
@@ -126,6 +127,97 @@ public class SetupActivity extends Activity {
         sv.addView(root);
         setContentView(sv);
         refresh();
+        showCrashReportIfAny();
+    }
+
+    // --- crash report / logs ------------------------------------------------
+    private File logsDir() {
+        File ext = getExternalFilesDir(null);
+        return new File(ext, "logs");
+    }
+
+    private File crashFile() { return new File(logsDir(), "crash.txt"); }
+
+    private File gameLog() { return new File(logsDir(), BuildConfig.PROJECT + ".log"); }
+
+    private static String tail(File f, int maxChars) {
+        if (f == null || !f.isFile()) return "";
+        try (java.io.RandomAccessFile raf = new java.io.RandomAccessFile(f, "r")) {
+            long len = raf.length();
+            long from = Math.max(0, len - maxChars);
+            raf.seek(from);
+            byte[] buf = new byte[(int) (len - from)];
+            raf.readFully(buf);
+            return new String(buf, java.nio.charset.StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    /** libmain.so writes logs/crash.txt from its signal handler; show it once. */
+    private void showCrashReportIfAny() {
+        File c = crashFile();
+        if (!c.isFile()) return;
+        String report = tail(c, 6000);
+        String log = tail(gameLog(), 3000);
+        String text = report + "\n--- last log lines ---\n" + log;
+        TextView tv = new TextView(this);
+        tv.setText(text);
+        tv.setTextSize(11);
+        tv.setTypeface(Typeface.MONOSPACE);
+        tv.setTextIsSelectable(true);
+        int p = (int) (12 * getResources().getDisplayMetrics().density);
+        tv.setPadding(p, p, p, p);
+        ScrollView sv = new ScrollView(this);
+        sv.addView(tv);
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.crash_title)
+                .setView(sv)
+                .setPositiveButton(R.string.share, (d, w) -> shareText(getString(R.string.crash_title), text))
+                .setNeutralButton(R.string.copy, (d, w) -> copyText(text))
+                .setNegativeButton(android.R.string.ok, null)
+                .setOnDismissListener(d -> { c.renameTo(new File(logsDir(), "crash.prev.txt")); })
+                .show();
+    }
+
+    private void showLogsDialog() {
+        String prev = tail(new File(logsDir(), "crash.prev.txt"), 4000);
+        String cur = tail(crashFile(), 4000);
+        String log = tail(gameLog(), 6000);
+        String text = (cur.isEmpty() ? prev : cur);
+        if (!text.isEmpty()) text = "--- last crash ---\n" + text + "\n";
+        text += "--- " + BuildConfig.PROJECT + ".log (tail) ---\n" + (log.isEmpty() ? "(no log yet)" : log);
+        final String all = text;
+        TextView tv = new TextView(this);
+        tv.setText(all);
+        tv.setTextSize(11);
+        tv.setTypeface(Typeface.MONOSPACE);
+        tv.setTextIsSelectable(true);
+        int p = (int) (12 * getResources().getDisplayMetrics().density);
+        tv.setPadding(p, p, p, p);
+        ScrollView sv = new ScrollView(this);
+        sv.addView(tv);
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.logs)
+                .setView(sv)
+                .setPositiveButton(R.string.share, (d, w) -> shareText(BuildConfig.PROJECT + " log", all))
+                .setNeutralButton(R.string.copy, (d, w) -> copyText(all))
+                .setNegativeButton(android.R.string.ok, null)
+                .show();
+    }
+
+    private void shareText(String subject, String text) {
+        Intent i = new Intent(Intent.ACTION_SEND);
+        i.setType("text/plain");
+        i.putExtra(Intent.EXTRA_SUBJECT, subject);
+        i.putExtra(Intent.EXTRA_TEXT, text);
+        try { startActivity(Intent.createChooser(i, subject)); } catch (Exception e) { copyText(text); }
+    }
+
+    private void copyText(String text) {
+        android.content.ClipboardManager cm = (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+        if (cm != null) cm.setPrimaryClip(android.content.ClipData.newPlainText("log", text));
+        Toast.makeText(this, R.string.copied, Toast.LENGTH_SHORT).show();
     }
 
     private Button button(LinearLayout parent, int text, View.OnClickListener l) {

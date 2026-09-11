@@ -19,11 +19,18 @@
 
 #include <android/log.h>
 #include <dlfcn.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <ucontext.h>
+#include <unistd.h>
+#include <unwind.h>
 #include <sys/resource.h>
 #include <jni.h>
 
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -116,6 +123,139 @@ JavaVM* QueryJavaVm() {
   return nullptr;
 }
 
+// --- crash reporter ---------------------------------------------------------
+// Android throws a native crash away (a tombstone the user cannot reach without
+// adb). This writes <logs>/crash.txt from the signal handler with the
+// async-signal-safe subset: signal, fault address, pc, the symbol (sub_XXXXXXXX
+// = the guest function) and module offset of every frame. SetupActivity shows
+// the file on the next launch. The SDK's own handlers run first (write-watch,
+// SEH regions) and chain here only for genuinely unhandled faults.
+char g_crash_path[512];
+
+void CrashWrite(int fd, const char* s) {
+  size_t n = 0;
+  while (s[n]) ++n;
+  while (n) {
+    ssize_t w = write(fd, s, n);
+    if (w <= 0) return;
+    s += w;
+    n -= static_cast<size_t>(w);
+  }
+}
+
+void CrashHex(int fd, uint64_t v) {
+  char buf[17];
+  int i = 16; buf[i] = 0;
+  do { int d = int(v & 15); buf[--i] = char(d < 10 ? '0' + d : 'a' + d - 10); v >>= 4; } while (v);
+  CrashWrite(fd, buf + i);
+}
+
+void CrashAddr(int fd, uintptr_t pc) {
+  CrashWrite(fd, "0x");
+  CrashHex(fd, pc);
+  Dl_info di{};
+  if (dladdr(reinterpret_cast<void*>(pc), &di) && di.dli_fname) {
+    const char* base = di.dli_fname;
+    for (const char* q = base; *q; ++q) if (*q == '/') base = q + 1;
+    CrashWrite(fd, "  ");
+    CrashWrite(fd, base);
+    CrashWrite(fd, "+0x");
+    CrashHex(fd, pc - reinterpret_cast<uintptr_t>(di.dli_fbase));
+    if (di.dli_sname) {
+      CrashWrite(fd, "  ");
+      CrashWrite(fd, di.dli_sname);
+      CrashWrite(fd, "+0x");
+      CrashHex(fd, pc - reinterpret_cast<uintptr_t>(di.dli_saddr));
+    }
+  }
+}
+
+struct CrashTrace { int fd; int n; };
+
+_Unwind_Reason_Code CrashUnwind(struct _Unwind_Context* c, void* arg) {
+  auto* t = static_cast<CrashTrace*>(arg);
+  uintptr_t pc = _Unwind_GetIP(c);
+  if (pc && t->n < 48) {
+    CrashWrite(t->fd, "  #");
+    char idx[4] = {char('0' + t->n / 10), char('0' + t->n % 10), ' ', 0};
+    CrashWrite(t->fd, idx);
+    CrashAddr(t->fd, pc);
+    CrashWrite(t->fd, "\n");
+  }
+  ++t->n;
+  return t->n >= 48 ? _URC_END_OF_STACK : _URC_NO_REASON;
+}
+
+void CrashHandler(int sig, siginfo_t* info, void* uctx) {
+  static volatile sig_atomic_t entered = 0;
+  if (!entered) {
+    entered = 1;
+    int fd = open(g_crash_path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+    if (fd >= 0) {
+      CrashWrite(fd, REX_APP_NAME " native crash\nsignal: ");
+      const char* name = sig == SIGSEGV ? "SIGSEGV (access violation)" :
+                         sig == SIGBUS ? "SIGBUS (misaligned/bad mapping)" :
+                         sig == SIGILL ? "SIGILL (illegal instruction / trap)" :
+                         sig == SIGFPE ? "SIGFPE (arithmetic)" :
+                         sig == SIGABRT ? "SIGABRT (abort / assertion / uncaught exception)" :
+                         sig == SIGTRAP ? "SIGTRAP (breakpoint)" : "unknown";
+      CrashWrite(fd, name);
+      CrashWrite(fd, "\nfault address: 0x");
+      CrashHex(fd, reinterpret_cast<uintptr_t>(info ? info->si_addr : nullptr));
+      auto* uc = static_cast<ucontext_t*>(uctx);
+      if (uc) {
+        CrashWrite(fd, "\npc: ");
+        CrashAddr(fd, static_cast<uintptr_t>(uc->uc_mcontext.pc));
+        CrashWrite(fd, "\nlr: ");
+        CrashAddr(fd, static_cast<uintptr_t>(uc->uc_mcontext.regs[30]));
+        CrashWrite(fd, "\nsp: 0x");
+        CrashHex(fd, uc->uc_mcontext.sp);
+        CrashWrite(fd, "\nx0-x7:");
+        for (int i = 0; i < 8; ++i) { CrashWrite(fd, " 0x"); CrashHex(fd, uc->uc_mcontext.regs[i]); }
+        CrashWrite(fd, "\nx19-x21:");
+        for (int i = 19; i < 22; ++i) { CrashWrite(fd, " 0x"); CrashHex(fd, uc->uc_mcontext.regs[i]); }
+      }
+      CrashWrite(fd, "\nbacktrace (pc  module+offset  symbol+offset; sub_XXXXXXXX = guest function):\n");
+      CrashTrace t{fd, 0};
+      _Unwind_Backtrace(CrashUnwind, &t);
+      CrashWrite(fd, "\n");
+      close(fd);
+    }
+  }
+  signal(sig, SIG_DFL);
+  raise(sig);
+}
+
+void InstallCrashReporter(const std::string& log_dir) {
+  std::string path = log_dir + "/crash.txt";
+  if (path.size() >= sizeof(g_crash_path)) return;
+  std::memcpy(g_crash_path, path.c_str(), path.size() + 1);
+  // Run on an alternate stack so a stack overflow is reported too.
+  static std::vector<char> alt_stack(1 << 17);
+  stack_t ss{};
+  ss.ss_sp = alt_stack.data();
+  ss.ss_size = alt_stack.size();
+  sigaltstack(&ss, nullptr);
+  struct sigaction sa{};
+  sa.sa_sigaction = CrashHandler;
+  sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
+  sigemptyset(&sa.sa_mask);
+  for (int sig : {SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT, SIGTRAP}) sigaction(sig, &sa, nullptr);
+  std::set_terminate([] {
+    // Uncaught C++ exception (REX_UNIMPLEMENTED, bad_alloc...): name it, then
+    // fall into the SIGABRT path above for the backtrace.
+    if (auto ex = std::current_exception()) {
+      try { std::rethrow_exception(ex); }
+      catch (const std::exception& e) {
+        __android_log_print(ANDROID_LOG_ERROR, REX_APP_NAME, "uncaught exception: %s", e.what());
+        int fd = open(g_crash_path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+        if (fd >= 0) { CrashWrite(fd, "uncaught exception: "); CrashWrite(fd, e.what()); CrashWrite(fd, "\n"); close(fd); }
+      } catch (...) {}
+    }
+    std::abort();
+  });
+}
+
 std::string ResolveLogDir(const std::string& external_dir) {
   const std::string dir = external_dir + "/logs";
   std::error_code ec;
@@ -180,6 +320,10 @@ int RunAndroidApp() {
   std::error_code ec;
   std::filesystem::create_directories(external_dir + "/data", ec);
   const std::string log_dir = ResolveLogDir(external_dir);
+  // A previous crash.txt is consumed by the launcher; a fresh launch means the
+  // user has seen it (or chose to play again) -- start clean.
+  std::filesystem::remove(log_dir + "/crash.txt", ec);
+  InstallCrashReporter(log_dir);
 
   rex::SetAndroidApplicationContext(java_vm, SDL_GetAndroidActivity(), lib_dir.c_str());
   rex::thread::AndroidInitialize();

@@ -13,6 +13,11 @@
     <string name="pick_iso">Choose ISO / XBLA package / default.xex</string>
     <string name="pick_folder">Choose folder (extracted game or Games on Demand)</string>
     <string name="graphics">Graphics &amp; performance</string>
+    <string name="logs">Logs &amp; crash report</string>
+    <string name="crash_title">The game crashed last time</string>
+    <string name="share">Share</string>
+    <string name="copy">Copy</string>
+    <string name="copied">Copied to clipboard</string>
     <string name="reset">Remove game files</string>
     <string name="reset_confirm">Delete the extracted game files from this app\'s storage?</string>
     <string name="err_no_xex_in_iso">The disc image has no default.xex – not an Xbox 360 game disc.</string>
